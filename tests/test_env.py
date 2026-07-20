@@ -41,7 +41,7 @@ def test_pbrs_closed_loop_nets_zero_when_gamma_one():
     w = env.world
     w.set_chickens([[45.0, 30.0]])
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
-    env._last_phi = env._phi(); env._last_nearest_id = w.nearest_chicken_id()
+    env._last_phi = env._phi(); env._last_ids = frozenset(int(i) for i in w.chicken_id)
     total = 0.0
     for p in [np.array([31.0, 30.0]), np.array([30.0, 30.0])]:   # out and back to same phi
         w.head = p; w.head_uw = p.copy()
