@@ -43,15 +43,18 @@ purple = own body).
 ## Train (headless, fast — loads the M1 fully)
 
 ```bash
-./snake train --steps 2000000 --envs 8
+./snake train --steps 2000000 --envs 16    # set --envs to your performance-core count
 # resume from the last checkpoint: same command
 # start over from scratch:          add --reset
 ```
 
 Training runs on CPU with `SubprocVecEnv` (many random worlds in parallel) — for a
-tiny MLP this beats GPU/MPS. It prints running stats (chickens eaten, deaths) and
-saves `models/snake.zip` + `models/vecnormalize.pkl` periodically, so you can stop
-any time (Ctrl-C) and `./snake watch` the current checkpoint.
+tiny MLP this beats GPU/MPS. `--envs` scales with your CPU: ~one env per performance
+core saturates it (on an M1 Pro's 8 performance cores, `--envs 16` is the sweet spot;
+more just oversubscribes). The raycast is vectorized, so each env step is cheap. It
+prints running stats (chickens eaten, deaths) and saves `models/snake.zip` +
+`models/vecnormalize.pkl` periodically, so you can stop any time (Ctrl-C) and
+`./snake watch` the current checkpoint.
 
 ### Recommended curriculum (best results)
 
@@ -61,8 +64,8 @@ from step 0 traps it in "never dash, just survive" (it can't catch faster-fleein
 So train in two phases:
 
 ```bash
-./snake train --steps 1400000 --reset --dash-penalty 0     # phase 1: learn to hunt (dashing free)
-./snake train --steps 1600000                              # phase 2: resume, learn thrift (default penalty)
+./snake train --steps 1600000 --envs 16 --reset --easy-stamina   # phase 1: learn to hunt (cheap dash)
+./snake train --steps 1800000 --envs 16                          # phase 2: resume, real stamina reserve
 ```
 
 The viewer runs the current checkpoint in a fresh random world and draws the vision
