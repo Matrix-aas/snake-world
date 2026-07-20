@@ -84,5 +84,6 @@ class SnakeEnv(gym.Env):
         reward -= c.step_penalty * (1.0 + hunger)
         if out["dashed"]:                         # dashing burns energy -> use it only to chase, not constantly
             reward -= self._dash_penalty
-        info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps}
+        info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps,
+                "death_cause": self.world.death_cause}
         return observe(self.world), float(reward), terminated, truncated, info

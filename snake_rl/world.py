@@ -76,6 +76,7 @@ class World:
         self.energy = cfg.energy_max
         self.alive = True
         self.dashed = False
+        self.death_cause = None
         self.steps = 0
         self._prev_head_uw = self.head_uw.copy()
         # chickens / obstacles filled by worldgen; default empty
@@ -303,14 +304,14 @@ class World:
             hit = segment_circle_hit(wrap(p0, self.size), wrap(p1, self.size),
                                      self.obstacle_pos, self.obstacle_r + hr, self.size)
             if hit.any():
-                self.alive = False
+                self.alive = False; self.death_cause = "obstacle"
                 return True
         body = self.body_points_uw()
         if len(body):
             hit = segment_circle_hit(p0, p1, body,
                                      np.full(len(body), self.cfg.body_radius + hr), self.size)
             if hit.any():
-                self.alive = False
+                self.alive = False; self.death_cause = "self"
                 return True
         return False
 

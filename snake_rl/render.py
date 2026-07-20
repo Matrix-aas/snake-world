@@ -175,13 +175,20 @@ class Renderer:
             if kd != -1:
                 pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
 
+    def _bar(self, x, y, w, h, frac, color, label):
+        pygame.draw.rect(self.display, (0, 0, 0), (x - 1, y - 1, w + 2, h + 2))
+        pygame.draw.rect(self.display, (48, 52, 62), (x, y, w, h))
+        pygame.draw.rect(self.display, color, (x, y, int(w * max(0.0, min(1.0, frac))), h))
+        self.display.blit(self.font.render(label, True, (230, 233, 240)), (x + w + 8, y - 2))
+
     def _hud(self, world):
-        txt = f"length {world.target_length:.0f}    stamina {world.stamina:.0f}/{world.cfg.s_max:.0f}    energy {world.energy:.0f}"
-        label = self.font.render(txt, True, (228, 231, 238))
-        pad = 8
-        panel = pygame.Surface((label.get_width() + 2 * pad, label.get_height() + 2 * pad), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 110))
-        self.display.blit(panel.convert_alpha(), (8, 8)); self.display.blit(label, (8 + pad, 8 + pad))
+        c = world.cfg
+        panel = pygame.Surface((250, 92), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 120))
+        self.display.blit(panel.convert_alpha(), (8, 8))
+        self.display.blit(self.font.render(f"length {world.target_length:.0f}", True, (228, 231, 238)), (18, 16))
+        self._bar(18, 40, 150, 12, world.stamina / c.s_max, (90, 210, 250), "dash")     # reserve for the pounce
+        self._bar(18, 62, 150, 12, world.energy / c.energy_max, (240, 190, 90), "food")  # hunger
 
     def draw(self, world, body_uw=None, chick_pos=None, chick_dir=None):
         self._ensure(world)
