@@ -210,6 +210,16 @@ class World:
         self.chicken_id = np.arange(self._next_chicken_id, self._next_chicken_id + len(positions))
         self._next_chicken_id += len(positions)
 
+    def _blocked(self, old, new):
+        """True if `new` moves deeper into an obstacle than `old` (so tangential/outward moves pass)."""
+        if not len(self.obstacle_pos):
+            return False
+        nc = float((torus_dist(self.obstacle_pos, new, self.size) - self.obstacle_r).min())
+        if nc >= self.cfg.chicken_radius:
+            return False
+        oc = float((torus_dist(self.obstacle_pos, old, self.size) - self.obstacle_r).min())
+        return nc < oc
+
     def update_chickens(self):
         c = self.cfg
         if len(self.chicken_pos) == 0:
@@ -218,20 +228,19 @@ class World:
         dist = np.linalg.norm(to_head, axis=1)
         for i in range(len(self.chicken_pos)):
             if dist[i] < c.r_flee and dist[i] > 1e-6:
-                dir_vec = -to_head[i] / dist[i]                          # away from snake
+                base = np.arctan2(-to_head[i][1], -to_head[i][0])       # away from snake
                 speed = c.v_flee
             else:
                 self.chicken_dir[i] += self.rng.normal(0, 0.3)          # slow wander drift
-                dir_vec = np.array([np.cos(self.chicken_dir[i]), np.sin(self.chicken_dir[i])])
-                speed = c.v_wander
-            new_pos = wrap(self.chicken_pos[i] + speed * dir_vec, self.size)
-            if len(self.obstacle_pos):
-                new_clear = float((torus_dist(self.obstacle_pos, new_pos, self.size) - self.obstacle_r).min())
-                old_clear = float((torus_dist(self.obstacle_pos, self.chicken_pos[i], self.size) - self.obstacle_r).min())
-                # reject only moves that push FURTHER into a rock; a chicken already too close may still move outward
-                if new_clear < c.chicken_radius and new_clear < old_clear:
-                    continue
-            self.chicken_pos[i] = new_pos
+                base = self.chicken_dir[i]; speed = c.v_wander
+            old = self.chicken_pos[i]
+            for da in (0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6):           # go straight, else steer around the rock
+                a = base + da
+                new = wrap(old + speed * np.array([np.cos(a), np.sin(a)]), self.size)
+                if not self._blocked(old, new):
+                    self.chicken_pos[i] = new
+                    self.chicken_dir[i] = a                             # keep heading consistent for wander
+                    break
 
     def try_eat(self):
         if len(self.chicken_pos) == 0:
@@ -274,8 +283,11 @@ class World:
 
     def maybe_spawn(self):
         c = self.cfg
-        need = len(self.chicken_pos) == 0
-        if need or (len(self.chicken_pos) < c.max_chickens and self.rng.random() < 1.0 / c.spawn_period):
+        n = len(self.chicken_pos)
+        if n >= c.max_chickens:
+            return
+        p = 0.06 if n < c.min_chickens else 1.0 / c.spawn_period        # fast refill to min, then random up to max
+        if n == 0 or self.rng.random() < p:
             self._add_chicken(self._free_point(c.chicken_radius))
 
     def maybe_spawn_forced(self):

@@ -76,5 +76,7 @@ class SnakeEnv(gym.Env):
         # standard potential-shaping artifact — hunger ramps the penalty and restores "get moving" pressure.
         hunger = 1.0 - self.world.energy / c.energy_max
         reward -= c.step_penalty * (1.0 + hunger)
+        if out["dashed"]:                         # dashing burns energy -> use it only to chase, not constantly
+            reward -= c.dash_penalty
         info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps}
         return observe(self.world), float(reward), terminated, truncated, info

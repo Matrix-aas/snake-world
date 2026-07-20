@@ -19,7 +19,8 @@ class Config:
     r_flee: float = 12.0
     chicken_radius: float = 1.0
     max_chickens: int = 5
-    spawn_period: int = 200          # avg steps between spawns while < max
+    min_chickens: int = 3            # keep the world populated (fast refill below this)
+    spawn_period: int = 90           # avg steps between random spawns between min and max
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
@@ -52,6 +53,7 @@ class Config:
     reward_eat: float = 10.0
     reward_death: float = -10.0
     step_penalty: float = 0.01
+    dash_penalty: float = 0.03       # per dash-step: dashing costs energy, so use it only to chase
     catch_slack_k: float = 1.5
 
     @property

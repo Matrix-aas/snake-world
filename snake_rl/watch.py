@@ -27,7 +27,12 @@ def _world_of(vec):
 
 
 def _interp_body(prev, cur, f):
-    return prev + (cur - prev) * f if prev.shape == cur.shape else cur
+    # Blend the head-side prefix (stable between steps); when the snake grows, the extra tail
+    # points just snap in far from the head — no visible stutter on the eat step.
+    n = min(len(prev), len(cur))
+    out = cur.copy()
+    out[:n] = prev[:n] + (cur[:n] - prev[:n]) * f
+    return out
 
 
 def _chicken_snap(world):
@@ -142,10 +147,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, deter
                     world = _world_of(vec)
                     prev_body, prev_ch = cur_body, cur_ch
                     cur_body, cur_ch = snapshot(world)
-                    if done[0]:
+                    if done[0]:                              # autoreset already gave a fresh world
                         prev_body, prev_ch = cur_body, cur_ch; since = 0.0
-                        renderer.draw(world, cur_body, *_interp_chickens(cur_ch, cur_ch, 0, world.size))
-                        pygame.time.wait(300)
                         break
             f = 0.0 if paused else min(1.0, since / interval)
             body = _interp_body(prev_body, cur_body, f)

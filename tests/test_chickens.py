@@ -39,6 +39,14 @@ def test_spawn_respects_max():
     assert len(w.chicken_pos) == CFG.max_chickens
 
 
+def test_spawn_refills_to_minimum():
+    w = World(CFG, seed=3, size=(80, 80))
+    w.set_chickens(np.zeros((0, 2)))                  # empty world
+    for _ in range(300):
+        w.maybe_spawn()
+    assert CFG.min_chickens <= len(w.chicken_pos) <= CFG.max_chickens
+
+
 def test_ids_stable_across_eat():
     w = World(CFG, seed=1, size=(60, 60))
     w.head = np.array([1.0, 1.0])
