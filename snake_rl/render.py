@@ -1,4 +1,5 @@
-"""pygame renderer: torus world + optional sensor overlay + HUD."""
+"""pygame renderer: torus-aware world + optional sensor overlay + HUD."""
+import numpy as np
 import pygame
 from .sensors import ray_dirs, sense_vision, smell
 from .world import wrap
@@ -13,26 +14,32 @@ class Renderer:
         self.scale = scale
         self.show_sensors = show_sensors
         self.screen = None
-        self.font = pygame.font.SysFont("menlo", 14)
+        self.wpx = self.hpx = 0
+        self.font = pygame.font.SysFont("menlo,consolas,monospace", 14)
 
     def _ensure(self, world):
         w = int(world.size[0] * self.scale); h = int(world.size[1] * self.scale)
-        if self.screen is None or self.screen.get_size() != (w, h):
+        if self.screen is None or (self.wpx, self.hpx) != (w, h):
+            self.wpx, self.hpx = w, h
             self.screen = pygame.display.set_mode((w, h))
 
-    def _p(self, xy):
-        return (int(xy[0] * self.scale), int(xy[1] * self.scale))
+    def _circle(self, color, pos, radius_px):
+        """Draw a circle at its wrapped position AND the 8 neighbor images (so it shows across the seam)."""
+        bx = int(pos[0] * self.scale); by = int(pos[1] * self.scale)
+        for ox in (0, -self.wpx, self.wpx):
+            for oy in (0, -self.hpx, self.hpx):
+                pygame.draw.circle(self.screen, color, (bx + ox, by + oy), radius_px)
 
     def draw(self, world):
         self._ensure(world)
-        s = self.screen; s.fill(BG)
+        self.screen.fill(BG)
         for pos, r, kind in zip(world.obstacle_pos, world.obstacle_r, world.obstacle_kind):
-            pygame.draw.circle(s, TREE if kind == 1 else ROCK, self._p(pos), int(r * self.scale))
+            self._circle(TREE if kind == 1 else ROCK, pos, int(r * self.scale))
         for cpos in world.chicken_pos:
-            pygame.draw.circle(s, CHICK, self._p(cpos), max(3, int(world.cfg.chicken_radius * self.scale)))
+            self._circle(CHICK, cpos, max(3, int(world.cfg.chicken_radius * self.scale)))
         for bp in world.body_points():
-            pygame.draw.circle(s, SNAKE, self._p(bp), max(2, int(world.cfg.body_radius * self.scale)))
-        pygame.draw.circle(s, HEAD, self._p(world.head), max(3, int(world.cfg.head_radius * self.scale)))
+            self._circle(SNAKE, bp, max(2, int(world.cfg.body_radius * self.scale)))
+        self._circle(HEAD, world.head, max(3, int(world.cfg.head_radius * self.scale)))
         if self.show_sensors:
             self._draw_sensors(world)
         self._hud(world)
@@ -41,8 +48,12 @@ class Renderer:
     def _draw_sensors(self, world):
         v = sense_vision(world)
         for u, row in zip(ray_dirs(world.cfg, world.heading), v):
-            end = world.head + u * row[0] * world.cfg.ray_range
-            pygame.draw.line(self.screen, RAY, self._p(world.head), self._p(wrap(end, world.size)), 1)
+            dist = row[0] * world.cfg.ray_range
+            n = max(2, int(dist))
+            pts = [wrap(world.head + u * (dist * k / n), world.size) * self.scale for k in range(n + 1)]
+            for a, b in zip(pts, pts[1:]):           # skip the segment that jumps across the seam
+                if abs(a[0] - b[0]) < self.wpx / 2 and abs(a[1] - b[1]) < self.hpx / 2:
+                    pygame.draw.line(self.screen, RAY, a, b, 1)
 
     def _hud(self, world):
         sm = smell(world)
