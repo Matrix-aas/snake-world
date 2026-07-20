@@ -49,15 +49,15 @@ def test_pbrs_closed_loop_nets_zero_when_gamma_one():
     assert abs(total) < 1e-9                 # telescopes exactly at gamma=1
 
 
-def test_pbrs_zeroes_on_target_switch():
-    # when the nearest chicken (by id) changes, shaping must pay 0 (no spurious jump between targets)
+def test_pbrs_zeroes_on_set_change_not_on_nearest_switch():
+    # nearest-distance is continuous as the nearest identity switches among a fixed set -> shaping is PAID;
+    # only a change to the chicken SET (eat/spawn) zeroes it.
     env = SnakeEnv(seed=0); env.reset()
     w = env.world
     w.set_chickens([[45.0, 30.0], [15.0, 30.0]])
     w.head = np.array([31.0, 30.0]); w.head_uw = w.head.copy()     # nearest = chicken@45 (d14 < d16)
-    env._last_phi = env._phi(); env._last_nearest_id = w.nearest_chicken_id()
-    id_before = w.nearest_chicken_id()
-    w.head = np.array([25.0, 30.0]); w.head_uw = w.head.copy()     # nearest switches to chicken@15 (d10)
-    f = env._shaping()
-    assert w.nearest_chicken_id() != id_before   # sanity: target identity switched
-    assert f == 0.0                              # shaping zeroed on the switch step
+    env._last_phi = env._phi(); env._last_ids = frozenset(int(i) for i in w.chicken_id)
+    w.head = np.array([25.0, 30.0]); w.head_uw = w.head.copy()     # nearest switches to @15, SAME set
+    assert env._shaping() != 0.0                                   # continuous shaping paid, not zeroed
+    w.chicken_pos = w.chicken_pos[:1]; w.chicken_id = w.chicken_id[:1]   # a chicken removed (eaten)
+    assert env._shaping() == 0.0                                   # set changed -> zeroed

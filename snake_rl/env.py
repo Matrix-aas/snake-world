@@ -30,7 +30,7 @@ class SnakeEnv(gym.Env):
         self.observation_space = spaces.Box(low, high, (OBS_DIM,), np.float32)
         self.world = None
         self._last_phi = 0.0
-        self._last_nearest_id = -1
+        self._last_ids = frozenset()
 
     def _phi(self):
         _, d = self.world.nearest_chicken()
@@ -47,19 +47,21 @@ class SnakeEnv(gym.Env):
         world_seed = int(self.np_random.integers(0, 2 ** 31 - 1))
         self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size)
         self._last_phi = self._phi()
-        self._last_nearest_id = self.world.nearest_chicken_id()
+        self._last_ids = frozenset(int(i) for i in self.world.chicken_id)
         return observe(self.world), {}
 
     def _shaping(self):
-        """PBRS: gamma*phi' - phi, zeroed when the nearest chicken (by stable id) changes/none."""
-        nearest_id = self.world.nearest_chicken_id()
+        """PBRS: gamma*phi' - phi. Phi = -dist_to_nearest is CONTINUOUS as the nearest identity
+        switches among a fixed set (min of continuous distances), so we pay shaping normally then;
+        we only zero it when the chicken SET changes (eat/spawn), where the distance can jump."""
+        ids = frozenset(int(i) for i in self.world.chicken_id)
         phi = self._phi()
-        if nearest_id == -1 or nearest_id != self._last_nearest_id:
-            f = 0.0                                  # target changed / none: don't pay the jump
+        if not ids or ids != self._last_ids:
+            f = 0.0                                  # set changed (eat/spawn) or none: don't pay the jump
         else:
             f = self.cfg.gamma * phi - self._last_phi
         self._last_phi = phi
-        self._last_nearest_id = nearest_id
+        self._last_ids = ids
         return f
 
     def step(self, action):
