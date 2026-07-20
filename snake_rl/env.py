@@ -1,5 +1,6 @@
 """Gymnasium environment: sensors -> obs, MultiDiscrete action, PBRS reward, truncation."""
 import numpy as np
+from dataclasses import replace
 import gymnasium as gym
 from gymnasium import spaces
 from .config import CFG, assert_invariants
@@ -10,8 +11,10 @@ from .sensors import observe, OBS_DIM
 class SnakeEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, cfg=CFG, seed=None, world_size=None, dash_penalty=None):
+    def __init__(self, cfg=CFG, seed=None, world_size=None, dash_penalty=None, easy_stamina=False):
         super().__init__()
+        if easy_stamina:                       # curriculum phase 1: cheap, freely-available dash to learn hunting
+            cfg = replace(cfg, dash_min_stamina=0.05, stamina_regen=0.3)
         assert_invariants(cfg)
         self.cfg = cfg
         self._seed = seed

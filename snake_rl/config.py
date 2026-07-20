@@ -25,6 +25,7 @@ class Config:
     s_max: float = 30.0
     stamina_drain: float = 1.0
     stamina_regen: float = 0.15      # slow refill: a dash reserve is earned by walking -> deliberate bursts
+    dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
     # geometry
     head_radius: float = 1.0
     body_radius: float = 0.5

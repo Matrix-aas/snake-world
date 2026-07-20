@@ -8,15 +8,16 @@ from .config import CFG
 from .env import SnakeEnv
 
 
-def make_env(rank, seed, world_size=None, dash_penalty=None):
+def make_env(rank, seed, world_size=None, dash_penalty=None, easy_stamina=False):
     def _thunk():
-        return Monitor(SnakeEnv(seed=seed + rank, world_size=world_size, dash_penalty=dash_penalty))
+        return Monitor(SnakeEnv(seed=seed + rank, world_size=world_size,
+                                dash_penalty=dash_penalty, easy_stamina=easy_stamina))
     return _thunk
 
 
-def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None, dash_penalty=None):
+def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None, dash_penalty=None, easy_stamina=False):
     cls = DummyVecEnv if n_envs == 1 else SubprocVecEnv
-    vec = cls([make_env(i, seed, world_size, dash_penalty) for i in range(n_envs)])
+    vec = cls([make_env(i, seed, world_size, dash_penalty, easy_stamina) for i in range(n_envs)])
     vec = VecFrameStack(vec, CFG.frame_stack)
     if norm_path and os.path.exists(norm_path):
         vec = VecNormalize.load(norm_path, vec)
@@ -61,11 +62,12 @@ class SaveEvery(BaseCallback):
 
 
 def train(total_steps, n_envs=8, model_path="models/snake.zip", reset=False, seed=0,
-          save_every=50000, log_every=10000, dash_penalty=None):
+          save_every=50000, log_every=10000, dash_penalty=None, easy_stamina=False):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
     norm_path = os.path.join(os.path.dirname(model_path) or ".", "vecnormalize.pkl")
     resuming = (not reset) and os.path.exists(model_path)
-    vec = build_vec(n_envs, seed, training=True, norm_path=None if reset else norm_path, dash_penalty=dash_penalty)
+    vec = build_vec(n_envs, seed, training=True, norm_path=None if reset else norm_path,
+                    dash_penalty=dash_penalty, easy_stamina=easy_stamina)
     if resuming:
         model = PPO.load(model_path, env=vec, device="cpu")
     else:
