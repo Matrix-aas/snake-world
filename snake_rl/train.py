@@ -79,7 +79,7 @@ def train(total_steps, n_envs=8, model_path="models/snake.zip", reset=False, see
         model = PPO.load(model_path, env=vec, device="cpu")
     else:
         model = PPO("MlpPolicy", vec, device="cpu", verbose=1, seed=seed,
-                    n_steps=1024, batch_size=512, n_epochs=10,
+                    n_steps=1024, batch_size=256, n_epochs=10,   # 64 minibatches over the 16384 buffer
                     learning_rate=_linear_lr(3e-4),   # decay to 0 over the run
                     gamma=CFG.gamma, gae_lambda=0.95, clip_range=0.2,
                     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, target_kl=0.03,

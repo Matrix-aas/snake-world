@@ -49,7 +49,7 @@ class Config:
     frame_stack: int = 4
     # rl / episode
     episode_horizon: int = 2000
-    gamma: float = 0.995             # ~200-step horizon: credits deliberate stalk-then-dash sequences
+    gamma: float = 0.99              # reliable for discovering hunting (0.995 slowed early value learning)
     # reward
     reward_eat: float = 10.0
     reward_death: float = -10.0
