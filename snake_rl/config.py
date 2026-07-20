@@ -16,7 +16,7 @@ class Config:
     # chickens
     v_wander: float = 0.25
     v_flee: float = 1.15
-    r_flee: float = 5.0              # chickens bolt only when the snake is close -> stalk-and-pounce, short dash
+    r_flee: float = 12.0             # chickens bolt at this distance; catching a runner needs a dash burst
     chicken_radius: float = 1.0
     max_chickens: int = 5
     min_chickens: int = 3            # keep the world populated (fast refill below this)
@@ -24,7 +24,7 @@ class Config:
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
-    stamina_regen: float = 0.35      # refill fast enough to sustain short pounces, slow enough to be a resource
+    stamina_regen: float = 0.3       # refills the reserve in ~100 steps: fast enough to hunt, slow enough to matter
     dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
     # geometry
     head_radius: float = 1.0
@@ -49,7 +49,7 @@ class Config:
     frame_stack: int = 4
     # rl / episode
     episode_horizon: int = 2000
-    gamma: float = 0.99
+    gamma: float = 0.995             # ~200-step horizon: credits deliberate stalk-then-dash sequences
     # reward
     reward_eat: float = 10.0
     reward_death: float = -10.0

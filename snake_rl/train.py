@@ -8,6 +8,13 @@ from .config import CFG
 from .env import SnakeEnv
 
 
+def _linear_lr(initial):
+    """SB3 schedule: learning rate decays linearly from `initial` to 0 over the run."""
+    def f(progress_remaining):
+        return progress_remaining * initial
+    return f
+
+
 def make_env(rank, seed, world_size=None, dash_penalty=None, easy_stamina=False):
     def _thunk():
         return Monitor(SnakeEnv(seed=seed + rank, world_size=world_size,
@@ -72,7 +79,11 @@ def train(total_steps, n_envs=8, model_path="models/snake.zip", reset=False, see
         model = PPO.load(model_path, env=vec, device="cpu")
     else:
         model = PPO("MlpPolicy", vec, device="cpu", verbose=1, seed=seed,
-                    n_steps=1024, batch_size=256, gamma=CFG.gamma, ent_coef=0.01)
+                    n_steps=1024, batch_size=512, n_epochs=10,
+                    learning_rate=_linear_lr(3e-4),   # decay to 0 over the run
+                    gamma=CFG.gamma, gae_lambda=0.95, clip_range=0.2,
+                    ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, target_kl=0.03,
+                    policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])))
     callbacks = [EpisodeStatsCallback(log_every),
                  SaveEvery(save_every, model_path, norm_path, n_envs)]
     try:
