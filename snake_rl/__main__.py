@@ -17,6 +17,7 @@ def main():
     w = sub.add_parser("watch")
     w.add_argument("--model", default="models/snake.zip")
     w.add_argument("--seed", type=int, default=None)
+    w.add_argument("--sim-hz", type=int, default=10, help="simulation steps per second (lower = slower)")
     w.add_argument("--headless", action="store_true", help="run N episodes without a window and print stats")
     w.add_argument("--episodes", type=int, default=5)
     a = p.parse_args()
@@ -25,7 +26,7 @@ def main():
     elif a.headless:
         run_headless(a.model, a.seed, a.episodes)
     else:
-        run_watch(a.model, a.seed)
+        run_watch(a.model, a.seed, sim_hz=a.sim_hz)
 
 
 if __name__ == "__main__":

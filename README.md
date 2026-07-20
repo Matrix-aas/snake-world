@@ -22,11 +22,15 @@ just runs — you never touch pip or activate anything.
 
 ```bash
 ./snake watch
-# keys:  SPACE pause · N new world · S toggle sensors · D toggle deterministic · ESC quit
+# keys:  SPACE pause · N new world · S sensors · D deterministic · ↑/↓ speed · ESC quit
+# start slower/faster:  ./snake watch --sim-hz 6   (default 10 steps/sec)
 
 # no window? headless eval prints per-episode stats instead:
 ./snake watch --headless --episodes 10
 ```
+
+The world renders at a calm pace with smooth interpolation: a tapering snake with eyes
+(and a tongue-flick on a dash), shaded rocks, leafy trees, and glowing chickens.
 
 ## Train (headless, fast — loads the M1 fully)
 

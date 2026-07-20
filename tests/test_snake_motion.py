@@ -66,6 +66,18 @@ def test_body_points_interpolated_at_segment_spacing():
     assert abs(np.linalg.norm(pts[0] - w.head_uw) - skip) < 1e-6
 
 
+def test_body_render_path_starts_at_head():
+    # rendering body must connect to the head (no neck gap -> no "detached red dot")
+    w = fresh(); w.heading = 0.0
+    w.head = np.array([20.0, 30.0]); w.head_uw = w.head.copy(); w.path_uw = [w.head_uw.copy()]
+    for _ in range(30):
+        w.move(steering=1, dash=0)
+    rp = w.body_render_path_uw()
+    assert len(rp) >= 5
+    np.testing.assert_allclose(rp[0], w.head_uw)     # index 0 IS the head
+    assert np.linalg.norm(np.diff(rp, axis=0), axis=1).max() < 1.0   # dense & continuous
+
+
 def test_body_points_no_tail_drop_at_full_length():
     # after growing to length_cap, every body target must be emitted (prune slack must not truncate the tail)
     w = fresh(); w.heading = 0.0

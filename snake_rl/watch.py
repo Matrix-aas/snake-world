@@ -52,9 +52,16 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
         print(f"episode {ep}: steps={out['steps']} eaten={out['eaten']} died={out['died']}")
 
 
-def run_watch(model_path="models/snake.zip", seed=None, fps=30, deterministic=False):
-    # Stochastic (deterministic=False) by default: survives a touch longer than argmax on an
-    # under-converged policy and looks more alive (natural variation). Toggle with D.
+def _interp_body(prev, cur, f):
+    """Smoothly blend two unwrapped body polylines (same shape between normal steps)."""
+    if prev.shape == cur.shape:
+        return prev + (cur - prev) * f
+    return cur
+
+
+def run_watch(model_path="models/snake.zip", seed=None, fps=30, sim_hz=10, deterministic=False):
+    # The sim advances at sim_hz steps/sec (slow enough to follow); rendering runs at `fps`
+    # and interpolates between steps for smooth motion. Stochastic by default (looks more alive).
     norm_path = _norm_path_for(model_path)
     _require_files(model_path, norm_path)
     model = PPO.load(model_path, device="cpu")
@@ -65,7 +72,11 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=30, deterministic=Fa
     running = True
     try:
         obs = vec.reset()
+        world = _world_of(vec)
+        prev_body = cur_body = world.body_render_path_uw()
+        since = 0.0
         while running:
+            frame_dt = clock.tick(fps) / 1000.0
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     running = False
@@ -78,15 +89,28 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=30, deterministic=Fa
                         renderer.toggle_sensors()
                     elif e.key == pygame.K_d:
                         deterministic = not deterministic
+                    elif e.key in (pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS):
+                        sim_hz = min(60, sim_hz + 2)
+                    elif e.key in (pygame.K_DOWN, pygame.K_MINUS):
+                        sim_hz = max(2, sim_hz - 2)
                     elif e.key == pygame.K_n:
-                        obs = vec.reset()
-            renderer.draw(_world_of(vec))            # draw current state BEFORE stepping
+                        obs = vec.reset(); world = _world_of(vec)
+                        prev_body = cur_body = world.body_render_path_uw(); since = 0.0
+            interval = 1.0 / sim_hz
             if not paused:
-                action, _ = model.predict(obs, deterministic=deterministic)
-                obs, _, done, _ = vec.step(action)   # VecEnv autoresets on done (no manual reset)
-                if done[0]:
-                    pygame.time.wait(400)            # brief pause so a death reads as a fresh world
-            clock.tick(fps)
+                since += frame_dt
+                while since >= interval:
+                    since -= interval
+                    action, _ = model.predict(obs, deterministic=deterministic)
+                    obs, _, done, _ = vec.step(action)   # VecEnv autoresets on done
+                    world = _world_of(vec)
+                    prev_body, cur_body = cur_body, world.body_render_path_uw()
+                    if done[0]:
+                        prev_body = cur_body; since = 0.0
+                        renderer.draw(world, cur_body); pygame.time.wait(300)
+                        break
+            body = _interp_body(prev_body, cur_body, min(1.0, since / interval)) if not paused else cur_body
+            renderer.draw(world, body)
     finally:
         renderer.close()
         vec.close()

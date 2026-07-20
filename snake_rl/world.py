@@ -75,6 +75,7 @@ class World:
         self.stamina = cfg.s_max
         self.energy = cfg.energy_max
         self.alive = True
+        self.dashed = False
         self.steps = 0
         self._prev_head_uw = self.head_uw.copy()
         # chickens / obstacles filled by worldgen; default empty
@@ -108,6 +109,7 @@ class World:
             self.stamina = min(c.s_max, self.stamina + c.stamina_regen)
         self.steps += 1
         self._prev_head_uw = prev_uw
+        self.dashed = dashing
         return dashing
 
     def _prune_path(self):
@@ -155,6 +157,31 @@ class World:
     def body_points(self):
         b = self.body_points_uw()
         return wrap(b, self.size) if len(b) else b
+
+    def body_render_path_uw(self, spacing=None):
+        """Dense UNWRAPPED body polyline from the head (index 0) back to target_length.
+        For rendering only — NO neck skip, so the drawn body connects to the head (no gap)."""
+        c = self.cfg
+        spacing = spacing if spacing is not None else max(0.25, c.body_radius * 0.5)
+        pts = np.array(self.path_uw)
+        if len(pts) < 2:
+            return self.head_uw[None].copy()
+        targets = np.arange(0.0, self.target_length + 1e-9, spacing)
+        out = [pts[-1].copy()]                           # index 0 = head (arc 0)
+        ti, acc = 1, 0.0
+        for i in range(len(pts) - 1, 0, -1):
+            a = pts[i]; b = pts[i - 1]
+            step = float(np.linalg.norm(a - b))
+            if step < 1e-12:
+                continue
+            while ti < len(targets) and acc + step >= targets[ti]:
+                frac = (targets[ti] - acc) / step
+                out.append(a + (b - a) * frac)
+                ti += 1
+            acc += step
+            if ti >= len(targets):
+                break
+        return np.array(out)
 
     # --- chickens & energy ---
     def nearest_chicken(self):
