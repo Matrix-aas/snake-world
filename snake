@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# One command, no Python fuss:  ./snake watch   ·   ./snake train
+# Creates the venv + installs deps on first run, then just runs.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+VENV=.venv
+PY="$VENV/bin/python"
+
+if [ ! -x "$PY" ] || ! "$PY" -c 'import stable_baselines3, pygame' >/dev/null 2>&1; then
+  echo "First run: setting up the environment (this happens only once)…"
+  if command -v python3.13 >/dev/null 2>&1; then BASE=python3.13; else BASE=python3; fi
+  "$BASE" -m venv "$VENV"
+  "$PY" -m pip install --quiet --upgrade pip
+  "$PY" -m pip install --quiet -r requirements.txt
+  echo "Done."
+fi
+
+exec "$PY" -m snake_rl "$@"

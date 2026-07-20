@@ -6,34 +6,40 @@ dodges rocks/trees and its own body, and catches runaway chickens with a
 stamina-limited **dash**. Worlds are randomly generated every episode, so the snake
 learns to survive anywhere — not to memorize one map.
 
-## Setup
+## Run it (one command, no Python setup)
+
+The `./snake` launcher creates the venv and installs everything on first run, then
+just runs — you never touch pip or activate anything.
 
 ```bash
-python3.13 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+./snake watch          # watch the trained snake (a model is included)
+./snake train          # train from the last checkpoint (or from scratch: ./snake train --reset)
+```
+
+(First `./snake` call does a one-time environment setup. Prefer `python3.13`.)
+
+## Watch (pygame)
+
+```bash
+./snake watch
+# keys:  SPACE pause · N new world · S toggle sensors · D toggle deterministic · ESC quit
+
+# no window? headless eval prints per-episode stats instead:
+./snake watch --headless --episodes 10
 ```
 
 ## Train (headless, fast — loads the M1 fully)
 
 ```bash
-python -m snake_rl train --steps 2000000 --envs 8
+./snake train --steps 2000000 --envs 8
 # resume from the last checkpoint: same command
 # start over from scratch:          add --reset
 ```
 
 Training runs on CPU with `SubprocVecEnv` (many random worlds in parallel) — for a
 tiny MLP this beats GPU/MPS. It prints running stats (chickens eaten, deaths) and
-saves `models/snake.zip` + `models/vecnormalize.pkl`.
-
-## Watch (pygame)
-
-```bash
-python -m snake_rl watch
-# keys:  SPACE pause · N new world · S toggle sensors · D toggle deterministic · ESC quit
-
-# no window? headless eval prints per-episode stats instead:
-python -m snake_rl watch --headless --episodes 10
-```
+saves `models/snake.zip` + `models/vecnormalize.pkl` periodically, so you can stop
+any time (Ctrl-C) and `./snake watch` the current checkpoint.
 
 The viewer runs the current checkpoint in a fresh random world and draws the vision
 rays and a smell readout. Play is stochastic by default (looks more alive and, on a
