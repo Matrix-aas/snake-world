@@ -6,3 +6,4 @@ models/
 *.zip
 runs/
 .DS_Store
+*.pkl
