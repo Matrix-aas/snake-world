@@ -14,7 +14,7 @@ class SnakeEnv(gym.Env):
     def __init__(self, cfg=CFG, seed=None, world_size=None, dash_penalty=None, easy_stamina=False):
         super().__init__()
         if easy_stamina:                       # curriculum phase 1: cheap, freely-available dash to learn hunting
-            cfg = replace(cfg, dash_min_stamina=0.05, stamina_regen=0.3)
+            cfg = replace(cfg, dash_min_stamina=0.05, stamina_regen=0.6)
         assert_invariants(cfg)
         self.cfg = cfg
         self._seed = seed

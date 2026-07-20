@@ -16,7 +16,7 @@ class Config:
     # chickens
     v_wander: float = 0.25
     v_flee: float = 1.15
-    r_flee: float = 12.0
+    r_flee: float = 5.0              # chickens bolt only when the snake is close -> stalk-and-pounce, short dash
     chicken_radius: float = 1.0
     max_chickens: int = 5
     min_chickens: int = 3            # keep the world populated (fast refill below this)
@@ -24,7 +24,7 @@ class Config:
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
-    stamina_regen: float = 0.15      # slow refill: a dash reserve is earned by walking -> deliberate bursts
+    stamina_regen: float = 0.35      # refill fast enough to sustain short pounces, slow enough to be a resource
     dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
     # geometry
     head_radius: float = 1.0
