@@ -35,6 +35,25 @@ def test_step_reports_eat():
     assert out["ate"] == 1 and not out["died"]
 
 
+def test_straight_motion_never_self_collides():
+    # regression: the neck-skip must clear the whole swept step, else a straight snake "hits its neck"
+    for dash in (0, 1):
+        w = World(CFG, seed=0, size=(60, 60))
+        w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros((0,)); w.obstacle_kind = np.zeros((0,), int)
+        w.target_length = CFG.length_cap        # worst case: full body trailing the head
+        w.stamina = 1e9                          # keep dashing every step
+        for _ in range(60):
+            assert not w.step(steering=1, dash=dash)["died"], f"straight motion self-collided (dash={dash})"
+
+
+def test_constant_turning_eventually_self_collides():
+    w = World(CFG, seed=0, size=(80, 80))
+    w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros((0,)); w.obstacle_kind = np.zeros((0,), int)
+    w.target_length = CFG.length_cap
+    died = any(w.step(steering=2, dash=0)["died"] for _ in range(40))   # ~1.8 full loops
+    assert died                                 # curling a full circle brings the head onto its own body
+
+
 def test_self_collision_when_curled():
     # craft a full circular curl (radius = min turn radius); head returns onto the tail
     w = World(CFG, seed=0, size=(80, 80))

@@ -125,8 +125,11 @@ class World:
         pts = np.array(self.path_uw)
         if len(pts) < 2:
             return np.zeros((0, 2))
-        # target arc-lengths from head: skip the head-adjacent stub, then every segment_spacing
-        skip = c.head_radius + c.segment_spacing + c.body_radius
+        # Skip the head-adjacent "neck", then a body point every segment_spacing.
+        # The skip must clear the whole swept collision segment [prev_head -> head] (up to v_dash long),
+        # not just the head, or a straight snake collides with its own neck. Needs
+        # skip - v_dash > body_radius + head_radius; this leaves a comfortable margin.
+        skip = c.head_radius + c.body_radius + c.v_dash + c.segment_spacing
         targets = []
         t = skip
         while t <= self.target_length:
@@ -249,6 +252,7 @@ class World:
 
     # --- collisions & full step ---
     def check_death(self):
+        # swept head segment [prev_head -> head]; body_points_uw already skips the neck (see body_points_uw)
         p0 = self._prev_head_uw
         p1 = self.head_uw
         hr = self.cfg.head_radius

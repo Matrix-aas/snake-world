@@ -62,7 +62,7 @@ def test_body_points_interpolated_at_segment_spacing():
     gaps = np.linalg.norm(np.diff(pts, axis=0), axis=1)
     np.testing.assert_allclose(gaps, CFG.segment_spacing, atol=1e-6)   # exact spacing, no duplicates
     # first body point sits past the head-adjacent skip
-    skip = CFG.head_radius + CFG.segment_spacing + CFG.body_radius
+    skip = CFG.head_radius + CFG.body_radius + CFG.v_dash + CFG.segment_spacing
     assert abs(np.linalg.norm(pts[0] - w.head_uw) - skip) < 1e-6
 
 
@@ -74,7 +74,7 @@ def test_body_points_no_tail_drop_at_full_length():
     w.target_length = CFG.length_cap
     for _ in range(80):
         w.move(steering=1, dash=0)
-    skip = CFG.head_radius + CFG.segment_spacing + CFG.body_radius
+    skip = CFG.head_radius + CFG.body_radius + CFG.v_dash + CFG.segment_spacing
     n_expected = int((CFG.length_cap - skip) // CFG.segment_spacing) + 1
     assert len(w.body_points_uw()) == n_expected     # no silently dropped tail points
 
