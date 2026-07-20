@@ -52,7 +52,9 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
         print(f"episode {ep}: steps={out['steps']} eaten={out['eaten']} died={out['died']}")
 
 
-def run_watch(model_path="models/snake.zip", seed=None, fps=30):
+def run_watch(model_path="models/snake.zip", seed=None, fps=30, deterministic=False):
+    # Stochastic (deterministic=False) by default: survives a touch longer than argmax on an
+    # under-converged policy and looks more alive (natural variation). Toggle with D.
     norm_path = _norm_path_for(model_path)
     _require_files(model_path, norm_path)
     model = PPO.load(model_path, device="cpu")
@@ -74,11 +76,13 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=30):
                         paused = not paused
                     elif e.key == pygame.K_s:
                         renderer.toggle_sensors()
+                    elif e.key == pygame.K_d:
+                        deterministic = not deterministic
                     elif e.key == pygame.K_n:
                         obs = vec.reset()
             renderer.draw(_world_of(vec))            # draw current state BEFORE stepping
             if not paused:
-                action, _ = model.predict(obs, deterministic=True)
+                action, _ = model.predict(obs, deterministic=deterministic)
                 obs, _, done, _ = vec.step(action)   # VecEnv autoresets on done (no manual reset)
                 if done[0]:
                     pygame.time.wait(400)            # brief pause so a death reads as a fresh world

@@ -37,7 +37,7 @@ class Config:
     energy_decay: float = 0.05
     energy_refill: float = 40.0
     # snake growth / cap
-    start_length: float = 6.0        # > neck-skip so a fresh snake already has a visible body
+    start_length: float = 6.0        # target body length (> neck-skip); the body fills in over the first few steps
     grow_per_chicken: float = 2.0
     length_cap: float = 24.0         # > tightest-curl circumference (~22.5) so self-collision is reachable, < world/2
     # sensing

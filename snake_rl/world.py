@@ -198,10 +198,12 @@ class World:
                 dir_vec = np.array([np.cos(self.chicken_dir[i]), np.sin(self.chicken_dir[i])])
                 speed = c.v_wander
             new_pos = wrap(self.chicken_pos[i] + speed * dir_vec, self.size)
-            if len(self.obstacle_pos) and (
-                torus_dist(self.obstacle_pos, new_pos, self.size)
-                    < self.obstacle_r + c.chicken_radius).any():
-                continue                                                # would enter a rock: stay put (never stranded inside)
+            if len(self.obstacle_pos):
+                new_clear = float((torus_dist(self.obstacle_pos, new_pos, self.size) - self.obstacle_r).min())
+                old_clear = float((torus_dist(self.obstacle_pos, self.chicken_pos[i], self.size) - self.obstacle_r).min())
+                # reject only moves that push FURTHER into a rock; a chicken already too close may still move outward
+                if new_clear < c.chicken_radius and new_clear < old_clear:
+                    continue
             self.chicken_pos[i] = new_pos
 
     def try_eat(self):
@@ -239,7 +241,9 @@ class World:
             if len(body) and (torus_dist(body, p, self.size) < radius + self.cfg.body_radius).any():
                 continue
             return p
-        return best                                   # exhausted: furthest-from-any-obstacle point, never inside one
+        # exhausted (only in a near-packed world worldgen never makes): furthest-from-any-obstacle point.
+        # It may skip the head/body checks, but a chicken spawned next to the snake is harmless — it gets eaten at once.
+        return best
 
     def maybe_spawn(self):
         c = self.cfg

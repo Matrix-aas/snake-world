@@ -29,12 +29,31 @@ saves `models/snake.zip` + `models/vecnormalize.pkl`.
 
 ```bash
 python -m snake_rl watch
-# keys:  SPACE pause · N new world · S toggle sensor overlay · ESC quit
+# keys:  SPACE pause · N new world · S toggle sensors · D toggle deterministic · ESC quit
+
+# no window? headless eval prints per-episode stats instead:
+python -m snake_rl watch --headless --episodes 10
 ```
 
-The viewer runs the current checkpoint deterministically in a fresh random world and
-draws the vision rays and a smell readout. Stop training any time and watch how far
-the snake has come.
+The viewer runs the current checkpoint in a fresh random world and draws the vision
+rays and a smell readout. Play is stochastic by default (looks more alive and, on a
+partly-trained policy, survives a touch longer than greedy argmax — press `D` to
+compare). Stop training any time and watch how far the snake has come.
+
+## What to expect
+
+Learning is fast on an M1 (CPU, ~4–5k steps/s with 8 envs):
+
+- **~0–300k steps:** learns not to die — episode length climbs from ~3 to ~200 steps
+  as it dodges obstacles and its own body.
+- **~300k–1M steps:** starts hunting — `ep_rew_mean` crosses from −10 into positive
+  territory (~+20) as it follows smell/sight to chickens and dashes down the runners.
+- **~3M steps (~15 min):** `ep_rew_mean` ≈ +50, ~4–5 chickens per episode, best runs
+  700–900 steps. It explores, tracks scent around rocks, and saves stamina for the chase.
+
+Random worlds every episode mean it generalizes rather than memorizing a map. Tune any
+constant in `snake_rl/config.py` (the invariants there fail fast if a change breaks the
+"a dash always catches a fleeing chicken" guarantee).
 
 ## How it works
 
