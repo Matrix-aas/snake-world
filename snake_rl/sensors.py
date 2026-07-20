@@ -1,6 +1,6 @@
 """Sensory observation: vision raycasting + smell field -> a fixed 42-float vector."""
 import numpy as np
-from .world import torus_delta, ray_circle_hit, segment_circle_hit
+from .world import torus_delta, segment_circle_hit
 
 OBS_DIM = 42
 
@@ -31,37 +31,45 @@ def _all_targets(world):
     return cen, rad, kind
 
 
-def sense_vision(world):
+def _scan(world, head, heading):
+    """Vectorized raycast of all rays at once. Returns (dirs (R,2), dist (R,), kind (R,))
+    with kind 0=obstacle,1=chicken,2=self,-1=none. Same result as a per-ray loop, faster."""
     c = world.cfg
     cen, rad, kind = _all_targets(world)
-    dirs = ray_dirs(c, world.heading)
+    dirs = ray_dirs(c, heading)                          # (R,2)
+    dist = np.full(c.n_rays, c.ray_range, float)
+    kinds = np.full(c.n_rays, -1, int)
+    if len(cen):
+        m = torus_delta(cen, head, world.size)           # (K,2) head->center (nearest image)
+        tca = dirs @ m.T                                 # (R,K) projection of each ray
+        d2 = (m * m).sum(1)[None, :] - tca ** 2
+        r2 = (rad ** 2)[None, :]
+        thc = np.sqrt(np.clip(r2 - d2, 0.0, None))
+        t0 = tca - thc; t1 = tca + thc
+        t = np.where(t0 >= 0, t0, t1)                    # origin inside a circle -> exit point
+        valid = (d2 <= r2) & (t >= 0) & (t <= c.ray_range)
+        tt = np.where(valid, t, np.inf)                  # (R,K)
+        j = np.argmin(tt, axis=1)
+        best = tt[np.arange(c.n_rays), j]
+        got = np.isfinite(best)
+        dist[got] = best[got]
+        kinds[got] = kind[j[got]]
+    return dirs, dist, kinds
+
+
+def sense_vision(world):
+    c = world.cfg
+    _, dist, kinds = _scan(world, world.head, world.heading)
     out = np.tile([1.0, 0.0, 0.0, 0.0], (c.n_rays, 1))
-    if len(cen) == 0:
-        return out
-    for i, u in enumerate(dirs):
-        t = ray_circle_hit(world.head, u, cen, rad, c.ray_range, world.size)
-        j = int(np.argmin(t))
-        if np.isfinite(t[j]):
-            out[i, 0] = t[j] / c.ray_range
-            out[i, 1 + kind[j]] = 1.0
+    hit = kinds >= 0
+    out[hit, 0] = dist[hit] / c.ray_range
+    out[hit, 1 + kinds[hit]] = 1.0
     return out
 
 
 def vision_distances(world, head, heading):
-    """For rendering: ray directions, hit distance, and hit kind (0=obstacle,1=chicken,2=self,-1=none)
-    cast from an arbitrary (interpolated) pose."""
-    c = world.cfg
-    cen, rad, kind = _all_targets(world)
-    dirs = ray_dirs(c, heading)
-    dist = np.full(c.n_rays, c.ray_range, float)
-    kinds = np.full(c.n_rays, -1, int)
-    if len(cen):
-        for i, u in enumerate(dirs):
-            t = ray_circle_hit(head, u, cen, rad, c.ray_range, world.size)
-            j = int(np.argmin(t))
-            if np.isfinite(t[j]):
-                dist[i] = t[j]; kinds[i] = int(kind[j])
-    return dirs, dist, kinds
+    """For rendering: ray directions, hit distance, and hit kind, from an arbitrary (interpolated) pose."""
+    return _scan(world, head, heading)
 
 
 def smell(world):
