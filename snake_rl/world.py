@@ -96,7 +96,7 @@ class World:
         elif steering == 2:
             self.heading += np.radians(c.turn_deg)
         self.heading %= 2 * np.pi
-        dashing = bool(dash) and self.stamina > 0
+        dashing = bool(dash) and self.stamina >= c.stamina_drain   # need a full unit -> stamina is a real reserve
         speed = c.v_dash if dashing else c.v_snake
         prev_uw = self.head_uw.copy()
         self.head_uw = prev_uw + speed * self.heading_vec()

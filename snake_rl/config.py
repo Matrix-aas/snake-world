@@ -24,7 +24,7 @@ class Config:
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
-    stamina_regen: float = 0.3
+    stamina_regen: float = 0.15      # slow refill: a dash reserve is earned by walking -> deliberate bursts
     # geometry
     head_radius: float = 1.0
     body_radius: float = 0.5
@@ -53,8 +53,8 @@ class Config:
     reward_eat: float = 10.0
     reward_death: float = -10.0
     step_penalty: float = 0.01
-    dash_penalty: float = 0.02       # per dash-step: dashing costs energy, so use it only to chase
-                                     # (curriculum: train phase 1 with --dash-penalty 0 to learn hunting first)
+    dash_penalty: float = 0.0        # dashing is rationed by the stamina reserve itself (gate + slow regen),
+                                     # so no extra reward penalty is needed (one over-suppresses hunting)
     catch_slack_k: float = 1.5
 
     @property
