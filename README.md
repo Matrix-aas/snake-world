@@ -53,6 +53,18 @@ tiny MLP this beats GPU/MPS. It prints running stats (chickens eaten, deaths) an
 saves `models/snake.zip` + `models/vecnormalize.pkl` periodically, so you can stop
 any time (Ctrl-C) and `./snake watch` the current checkpoint.
 
+### Recommended curriculum (best results)
+
+Dashing costs a reward penalty (`dash_penalty`) so the snake sprints only to chase, not
+constantly. But a fresh snake must learn *to hunt* before it can learn *thrift* — a penalty
+from step 0 traps it in "never dash, just survive" (it can't catch faster-fleeing chickens).
+So train in two phases:
+
+```bash
+./snake train --steps 1400000 --reset --dash-penalty 0     # phase 1: learn to hunt (dashing free)
+./snake train --steps 1600000                              # phase 2: resume, learn thrift (default penalty)
+```
+
 The viewer runs the current checkpoint in a fresh random world and draws the vision
 rays and a smell readout. Play is stochastic by default (looks more alive and, on a
 partly-trained policy, survives a touch longer than greedy argmax — press `D` to
