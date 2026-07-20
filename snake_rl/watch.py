@@ -77,14 +77,28 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
         print(f"episode {ep}: steps={out['steps']} eaten={out['eaten']} died={out['died']}")
 
 
-def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, deterministic=False):
+def _screen_fit_world_size(short=72.0):
+    """World size (in sim units) whose aspect matches the desktop, short side fixed to `short`.
+    The net is size-agnostic (egocentric senses), so any size plays fine; `short` keeps density sane."""
+    pygame.init()
+    info = pygame.display.Info()
+    sw, sh = info.current_w, info.current_h
+    if sw >= sh:
+        return (short * sw / sh, short), (sw, sh)
+    return (short, short * sh / sw), (sw, sh)
+
+
+def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, deterministic=False, fullscreen=True):
     # The sim advances at sim_hz steps/sec; rendering runs at `fps` and interpolates the whole
     # scene (snake body + chickens, seam-aware) between steps for smooth motion. Stochastic by default.
     norm_path = _norm_path_for(model_path)
     _require_files(model_path, norm_path)
     model = PPO.load(model_path, device="cpu")
-    vec = build_vec(1, seed or 0, training=False, norm_path=norm_path)
-    renderer = Renderer()
+    world_size = screen_size = None
+    if fullscreen:
+        world_size, screen_size = _screen_fit_world_size()   # map fills the screen at its aspect
+    vec = build_vec(1, seed or 0, training=False, norm_path=norm_path, world_size=world_size)
+    renderer = Renderer(fullscreen=fullscreen, screen_size=screen_size)
     clock = pygame.time.Clock()
     paused = False
     running = True

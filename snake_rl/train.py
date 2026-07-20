@@ -8,15 +8,15 @@ from .config import CFG
 from .env import SnakeEnv
 
 
-def make_env(rank, seed):
+def make_env(rank, seed, world_size=None):
     def _thunk():
-        return Monitor(SnakeEnv(seed=seed + rank))   # Monitor -> ep_rew_mean/ep_len_mean get logged
+        return Monitor(SnakeEnv(seed=seed + rank, world_size=world_size))   # Monitor -> ep_rew/ep_len logged
     return _thunk
 
 
-def build_vec(n_envs, seed, training=True, norm_path=None):
+def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None):
     cls = DummyVecEnv if n_envs == 1 else SubprocVecEnv
-    vec = cls([make_env(i, seed) for i in range(n_envs)])
+    vec = cls([make_env(i, seed, world_size) for i in range(n_envs)])
     vec = VecFrameStack(vec, CFG.frame_stack)
     if norm_path and os.path.exists(norm_path):
         vec = VecNormalize.load(norm_path, vec)

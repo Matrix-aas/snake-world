@@ -21,13 +21,18 @@ just runs — you never touch pip or activate anything.
 ## Watch (pygame)
 
 ```bash
-./snake watch
+./snake watch                       # fullscreen game; the map fits your screen
+./snake watch --windowed            # run in a window instead
 # keys:  SPACE pause · N new world · S sensors · D deterministic · ↑/↓ speed · ESC quit
 # start slower/faster:  ./snake watch --sim-hz 6   (default 10 steps/sec)
 
 # no window? headless eval prints per-episode stats instead:
 ./snake watch --headless --episodes 10
 ```
+
+The snake is **size-agnostic** — it senses only egocentrically (rays + smell), never the
+map size, and trained on random sizes — so the world is generated to match your screen's
+aspect and it plays any size just fine.
 
 Renders at 60 FPS with the whole scene interpolated between sim steps (snake and chickens
 move buttery-smooth). Anti-aliased via supersampling: a glossy tapering snake with eyes

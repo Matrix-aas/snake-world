@@ -10,12 +10,13 @@ from .sensors import observe, OBS_DIM
 class SnakeEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, cfg=CFG, seed=None):
+    def __init__(self, cfg=CFG, seed=None, world_size=None):
         super().__init__()
         assert_invariants(cfg)
         self.cfg = cfg
         self._seed = seed
         self._seeded = False
+        self._world_size = world_size          # None -> random size per episode; fixed -> e.g. screen-fit
         self.action_space = spaces.MultiDiscrete([3, 2])
         # bounded where known: ray dist & one-hots (0..35) and proprio (39..41) in [0,1];
         # smell (36..38): intensity in [0, max_chickens], gradient components in [-max_chickens, max_chickens]
@@ -43,7 +44,7 @@ class SnakeEnv(gym.Env):
         super().reset(seed=seed)
         self._seeded = True
         world_seed = int(self.np_random.integers(0, 2 ** 31 - 1))
-        self.world = generate_world(self.cfg, seed=world_seed)
+        self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size)
         self._last_phi = self._phi()
         self._last_nearest_id = self.world.nearest_chicken_id()
         return observe(self.world), {}

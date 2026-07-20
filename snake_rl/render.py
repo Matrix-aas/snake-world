@@ -24,26 +24,38 @@ def _lerp(a, b, t):
 
 
 class Renderer:
-    def __init__(self, scale=None, show_sensors=True):
+    def __init__(self, scale=None, show_sensors=True, fullscreen=False, screen_size=None):
         pygame.init()
         self.scale = scale
         self.show_sensors = show_sensors
+        self.fullscreen = fullscreen
+        self.screen_size = screen_size
         self.canvas = self.display = None
         self.cw = self.ch = self.dw = self.dh = 0
         self._scale = 1
+        self._ss = SS
         self.font = pygame.font.SysFont("menlo,consolas,monospace", 15)
         self._sprite_cache = {}
         self._vignette = None
 
     def _ensure(self, world):
-        base = self.scale or max(4, int(TARGET_PX / max(world.size)))
-        self._scale = base * SS
+        if self.fullscreen and self.screen_size:
+            dw, dh = self.screen_size
+            base = dw / world.size[0]                 # px per unit (world aspect matches the screen)
+        else:
+            base = self.scale or max(4, int(TARGET_PX / max(world.size)))
+            dw, dh = int(world.size[0] * base), int(world.size[1] * base)
+        ss = 2 if max(dw, dh) <= 1100 else 1          # supersample small windows; native res is crisp enough
+        self._ss = ss
+        self._scale = base * ss
         cw, ch = int(world.size[0] * self._scale), int(world.size[1] * self._scale)
-        dw, dh = int(world.size[0] * base), int(world.size[1] * base)
         if self.canvas is None or (self.cw, self.ch) != (cw, ch):
             self.cw, self.ch, self.dw, self.dh = cw, ch, dw, dh
             self.canvas = pygame.Surface((cw, ch))
-            self.display = pygame.display.set_mode((dw, dh))
+            self.display = pygame.display.set_mode((dw, dh), pygame.FULLSCREEN if self.fullscreen else 0)
+            pygame.display.set_caption("Snake-RL")
+            pygame.mouse.set_visible(not self.fullscreen)
+            self._sprite_cache = {}                   # fresh sprites for the new surface format
             self._vignette = self._make_vignette(dw, dh)
 
     def _p(self, xy):
@@ -64,6 +76,7 @@ class Renderer:
             for rr in range(r, 0, -1):
                 a = int(peak * (1 - rr / r) ** 2)
                 pygame.draw.circle(surf, (*color, a), (r, r), rr)
+            surf = surf.convert_alpha()               # match display format (avoids black-square artifacts)
             self._sprite_cache[key] = surf
         return surf
 
@@ -88,7 +101,7 @@ class Renderer:
             t = i / rings
             a = int(120 * t ** 2.4)
             pygame.draw.ellipse(surf, (0, 0, 0, a), (t * cx, t * cy, w - 2 * t * cx, h - 2 * t * cy), max(2, int(maxd / rings) + 2))
-        return surf
+        return surf.convert_alpha()
 
     # --- scene ---
     def _bg(self):
@@ -168,7 +181,7 @@ class Renderer:
         pad = 8
         panel = pygame.Surface((label.get_width() + 2 * pad, label.get_height() + 2 * pad), pygame.SRCALPHA)
         panel.fill((0, 0, 0, 110))
-        self.display.blit(panel, (8, 8)); self.display.blit(label, (8 + pad, 8 + pad))
+        self.display.blit(panel.convert_alpha(), (8, 8)); self.display.blit(label, (8 + pad, 8 + pad))
 
     def draw(self, world, body_uw=None, chick_pos=None, chick_dir=None):
         self._ensure(world)
@@ -183,7 +196,12 @@ class Renderer:
         if self.show_sensors:
             d = body_uw[0] - body_uw[1] if len(body_uw) > 1 else world.heading_vec()
             self._draw_sensors(world, body_uw[0], float(np.arctan2(d[1], d[0])))
-        pygame.transform.smoothscale(self.canvas, (self.dw, self.dh), self.display)
+        # Blit into the window via a temp surface (writing straight into the window surface
+        # renders black on some backends). At SS=1 the canvas is already display-sized.
+        if self._ss == 1:
+            self.display.blit(self.canvas, (0, 0))
+        else:
+            self.display.blit(pygame.transform.smoothscale(self.canvas, (self.dw, self.dh)), (0, 0))
         self.display.blit(self._vignette, (0, 0))
         self._hud(world)
         pygame.display.flip()
