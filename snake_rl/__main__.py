@@ -14,6 +14,8 @@ def main():
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--save-every", type=int, default=50_000)
     t.add_argument("--log-every", type=int, default=10_000)
+    t.add_argument("--dash-penalty", type=float, default=None,
+                   help="override reward penalty per dash step (curriculum: 0 to learn hunting, then >0)")
     w = sub.add_parser("watch")
     w.add_argument("--model", default="models/snake.zip")
     w.add_argument("--seed", type=int, default=None)
@@ -23,7 +25,7 @@ def main():
     w.add_argument("--episodes", type=int, default=5)
     a = p.parse_args()
     if a.cmd == "train":
-        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every)
+        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every, a.dash_penalty)
     elif a.headless:
         run_headless(a.model, a.seed, a.episodes)
     else:

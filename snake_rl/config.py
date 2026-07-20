@@ -53,7 +53,8 @@ class Config:
     reward_eat: float = 10.0
     reward_death: float = -10.0
     step_penalty: float = 0.01
-    dash_penalty: float = 0.03       # per dash-step: dashing costs energy, so use it only to chase
+    dash_penalty: float = 0.02       # per dash-step: dashing costs energy, so use it only to chase
+                                     # (curriculum: train phase 1 with --dash-penalty 0 to learn hunting first)
     catch_slack_k: float = 1.5
 
     @property

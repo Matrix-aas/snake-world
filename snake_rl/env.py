@@ -10,13 +10,14 @@ from .sensors import observe, OBS_DIM
 class SnakeEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, cfg=CFG, seed=None, world_size=None):
+    def __init__(self, cfg=CFG, seed=None, world_size=None, dash_penalty=None):
         super().__init__()
         assert_invariants(cfg)
         self.cfg = cfg
         self._seed = seed
         self._seeded = False
         self._world_size = world_size          # None -> random size per episode; fixed -> e.g. screen-fit
+        self._dash_penalty = cfg.dash_penalty if dash_penalty is None else dash_penalty  # curriculum override
         self.action_space = spaces.MultiDiscrete([3, 2])
         # bounded where known: ray dist & one-hots (0..35) and proprio (39..41) in [0,1];
         # smell (36..38): intensity in [0, max_chickens], gradient components in [-max_chickens, max_chickens]
@@ -77,6 +78,6 @@ class SnakeEnv(gym.Env):
         hunger = 1.0 - self.world.energy / c.energy_max
         reward -= c.step_penalty * (1.0 + hunger)
         if out["dashed"]:                         # dashing burns energy -> use it only to chase, not constantly
-            reward -= c.dash_penalty
+            reward -= self._dash_penalty
         info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps}
         return observe(self.world), float(reward), terminated, truncated, info
