@@ -1,11 +1,13 @@
-"""Watch mode: load a checkpoint and run one env with the pygame renderer (deterministic)."""
+"""Watch mode: load a checkpoint and run one env with the pygame renderer, smoothly interpolated."""
 import os
 import sys
+import numpy as np
 import pygame
 from stable_baselines3 import PPO
 from .config import CFG
 from .train import build_vec
 from .render import Renderer
+from .world import wrap, torus_delta
 
 
 def _norm_path_for(model_path):
@@ -22,6 +24,29 @@ def _require_files(model_path, norm_path):
 def _world_of(vec):
     """Reach the underlying World through VecNormalize -> VecFrameStack -> DummyVecEnv -> Monitor."""
     return vec.venv.venv.envs[0].unwrapped.world
+
+
+def _interp_body(prev, cur, f):
+    return prev + (cur - prev) * f if prev.shape == cur.shape else cur
+
+
+def _chicken_snap(world):
+    return {int(i): (world.chicken_pos[k].copy(), float(world.chicken_dir[k]))
+            for k, i in enumerate(world.chicken_id)}
+
+
+def _interp_chickens(prev, cur, f, size):
+    """Blend chicken positions by stable id, taking the nearest image across the torus seam."""
+    pos, dirs = [], []
+    for cid, (cp, cd) in cur.items():
+        if cid in prev:
+            pp, pd = prev[cid]
+            pos.append(wrap(pp + torus_delta(cp, pp, size) * f, size))
+            da = (cd - pd + np.pi) % (2 * np.pi) - np.pi
+            dirs.append(pd + da * f)
+        else:
+            pos.append(cp); dirs.append(cd)
+    return (np.array(pos) if pos else np.zeros((0, 2))), np.array(dirs)
 
 
 def rollout_once(model, norm_path, seed=0, max_steps=CFG.episode_horizon):
@@ -52,16 +77,9 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
         print(f"episode {ep}: steps={out['steps']} eaten={out['eaten']} died={out['died']}")
 
 
-def _interp_body(prev, cur, f):
-    """Smoothly blend two unwrapped body polylines (same shape between normal steps)."""
-    if prev.shape == cur.shape:
-        return prev + (cur - prev) * f
-    return cur
-
-
-def run_watch(model_path="models/snake.zip", seed=None, fps=30, sim_hz=10, deterministic=False):
-    # The sim advances at sim_hz steps/sec (slow enough to follow); rendering runs at `fps`
-    # and interpolates between steps for smooth motion. Stochastic by default (looks more alive).
+def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, deterministic=False):
+    # The sim advances at sim_hz steps/sec; rendering runs at `fps` and interpolates the whole
+    # scene (snake body + chickens, seam-aware) between steps for smooth motion. Stochastic by default.
     norm_path = _norm_path_for(model_path)
     _require_files(model_path, norm_path)
     model = PPO.load(model_path, device="cpu")
@@ -70,10 +88,14 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=30, sim_hz=10, deter
     clock = pygame.time.Clock()
     paused = False
     running = True
+
+    def snapshot(world):
+        return world.body_render_path_uw(), _chicken_snap(world)
+
     try:
         obs = vec.reset()
         world = _world_of(vec)
-        prev_body = cur_body = world.body_render_path_uw()
+        prev_body, prev_ch = cur_body, cur_ch = snapshot(world)
         since = 0.0
         while running:
             frame_dt = clock.tick(fps) / 1000.0
@@ -95,22 +117,26 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=30, sim_hz=10, deter
                         sim_hz = max(2, sim_hz - 2)
                     elif e.key == pygame.K_n:
                         obs = vec.reset(); world = _world_of(vec)
-                        prev_body = cur_body = world.body_render_path_uw(); since = 0.0
+                        prev_body, prev_ch = cur_body, cur_ch = snapshot(world); since = 0.0
             interval = 1.0 / sim_hz
             if not paused:
                 since += frame_dt
                 while since >= interval:
                     since -= interval
                     action, _ = model.predict(obs, deterministic=deterministic)
-                    obs, _, done, _ = vec.step(action)   # VecEnv autoresets on done
+                    obs, _, done, _ = vec.step(action)
                     world = _world_of(vec)
-                    prev_body, cur_body = cur_body, world.body_render_path_uw()
+                    prev_body, prev_ch = cur_body, cur_ch
+                    cur_body, cur_ch = snapshot(world)
                     if done[0]:
-                        prev_body = cur_body; since = 0.0
-                        renderer.draw(world, cur_body); pygame.time.wait(300)
+                        prev_body, prev_ch = cur_body, cur_ch; since = 0.0
+                        renderer.draw(world, cur_body, *_interp_chickens(cur_ch, cur_ch, 0, world.size))
+                        pygame.time.wait(300)
                         break
-            body = _interp_body(prev_body, cur_body, min(1.0, since / interval)) if not paused else cur_body
-            renderer.draw(world, body)
+            f = 0.0 if paused else min(1.0, since / interval)
+            body = _interp_body(prev_body, cur_body, f)
+            cpos, cdir = _interp_chickens(prev_ch, cur_ch, f, world.size)
+            renderer.draw(world, body, cpos, cdir)
     finally:
         renderer.close()
         vec.close()

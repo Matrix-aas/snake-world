@@ -29,8 +29,11 @@ just runs — you never touch pip or activate anything.
 ./snake watch --headless --episodes 10
 ```
 
-The world renders at a calm pace with smooth interpolation: a tapering snake with eyes
-(and a tongue-flick on a dash), shaded rocks, leafy trees, and glowing chickens.
+Renders at 60 FPS with the whole scene interpolated between sim steps (snake and chickens
+move buttery-smooth). Anti-aliased via supersampling: a glossy tapering snake with eyes
+(and a tongue-flick on a dash), shaded rocks, leafy trees, glowing chickens, soft shadows,
+a vignette, and vision rays tinted by what they hit (red = obstacle, yellow = chicken,
+purple = own body).
 
 ## Train (headless, fast — loads the M1 fully)
 

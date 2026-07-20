@@ -47,6 +47,23 @@ def sense_vision(world):
     return out
 
 
+def vision_distances(world, head, heading):
+    """For rendering: ray directions, hit distance, and hit kind (0=obstacle,1=chicken,2=self,-1=none)
+    cast from an arbitrary (interpolated) pose."""
+    c = world.cfg
+    cen, rad, kind = _all_targets(world)
+    dirs = ray_dirs(c, heading)
+    dist = np.full(c.n_rays, c.ray_range, float)
+    kinds = np.full(c.n_rays, -1, int)
+    if len(cen):
+        for i, u in enumerate(dirs):
+            t = ray_circle_hit(head, u, cen, rad, c.ray_range, world.size)
+            j = int(np.argmin(t))
+            if np.isfinite(t[j]):
+                dist[i] = t[j]; kinds[i] = int(kind[j])
+    return dirs, dist, kinds
+
+
 def smell(world):
     c = world.cfg
     if len(world.chicken_pos) == 0:
