@@ -18,11 +18,13 @@ class SnakeEnv(gym.Env):
         self._seeded = False
         self.action_space = spaces.MultiDiscrete([3, 2])
         # bounded where known: ray dist & one-hots (0..35) and proprio (39..41) in [0,1];
-        # smell (36..38) = [intensity>=0, grad_fwd any, grad_left any]
+        # smell (36..38): intensity in [0, max_chickens], gradient components in [-max_chickens, max_chickens]
+        # (each of <=max_chickens chickens contributes <=1 to intensity and <=1 in magnitude to the gradient)
+        m = float(cfg.max_chickens)
         low = np.zeros(OBS_DIM, np.float32)
         high = np.ones(OBS_DIM, np.float32)
-        low[36:39] = [0.0, -np.inf, -np.inf]
-        high[36:39] = [np.inf, np.inf, np.inf]
+        low[36:39] = [0.0, -m, -m]
+        high[36:39] = [m, m, m]
         self.observation_space = spaces.Box(low, high, (OBS_DIM,), np.float32)
         self.world = None
         self._last_phi = 0.0
@@ -69,6 +71,8 @@ class SnakeEnv(gym.Env):
             reward += c.reward_death
         else:
             reward += self._shaping()
+        # PBRS shaping (>=0 when a chicken is far) partly offsets this while well-fed; that's the
+        # standard potential-shaping artifact — hunger ramps the penalty and restores "get moving" pressure.
         hunger = 1.0 - self.world.energy / c.energy_max
         reward -= c.step_penalty * (1.0 + hunger)
         info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps}

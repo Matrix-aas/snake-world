@@ -32,8 +32,10 @@ def ray_circle_hit(origin, u, centers, radii, max_t, size):
     ok = (d2 <= radii ** 2)
     thc = np.sqrt(np.clip(radii ** 2 - d2, 0, None))
     t0 = tca - thc
-    valid = ok & (t0 >= 0) & (t0 <= max_t)
-    out[valid] = t0[valid]
+    t1 = tca + thc
+    t = np.where(t0 >= 0, t0, t1)                    # origin inside circle -> use exit point t1
+    valid = ok & (t >= 0) & (t <= max_t)
+    out[valid] = t[valid]
     return out
 
 
@@ -114,7 +116,8 @@ class World:
             return
         seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
         cum = np.cumsum(seg[::-1])[::-1]              # dist from head to each point's forward neighbor
-        keep = np.concatenate([cum <= (self.target_length + self.cfg.segment_spacing), [True]])
+        # slack = max motion step (v_dash), so body_points_uw never truncates its tail after a dash
+        keep = np.concatenate([cum <= (self.target_length + self.cfg.v_dash), [True]])
         self.path_uw = [p.copy() for p in pts[keep]]
 
     def body_points_uw(self):
@@ -191,7 +194,12 @@ class World:
                 self.chicken_dir[i] += self.rng.normal(0, 0.3)          # slow wander drift
                 dir_vec = np.array([np.cos(self.chicken_dir[i]), np.sin(self.chicken_dir[i])])
                 speed = c.v_wander
-            self.chicken_pos[i] = wrap(self.chicken_pos[i] + speed * dir_vec, self.size)
+            new_pos = wrap(self.chicken_pos[i] + speed * dir_vec, self.size)
+            if len(self.obstacle_pos) and (
+                torus_dist(self.obstacle_pos, new_pos, self.size)
+                    < self.obstacle_r + c.chicken_radius).any():
+                continue                                                # would enter a rock: stay put (never stranded inside)
+            self.chicken_pos[i] = new_pos
 
     def try_eat(self):
         if len(self.chicken_pos) == 0:
@@ -213,10 +221,14 @@ class World:
         self.energy = max(0.0, self.energy - self.cfg.energy_decay)
 
     def _free_point(self, radius):
+        best = None; best_clear = -np.inf
         for _ in range(50):
             p = self.rng.uniform([0, 0], self.size)
-            if len(self.obstacle_pos) and (
-                torus_dist(self.obstacle_pos, p, self.size) < self.obstacle_r + radius).any():
+            clear = np.inf if not len(self.obstacle_pos) else \
+                float((torus_dist(self.obstacle_pos, p, self.size) - self.obstacle_r).min())
+            if clear > best_clear:                    # remember the least-bad candidate
+                best_clear, best = clear, p
+            if clear < radius:
                 continue
             if torus_dist(self.head, p, self.size) < self.cfg.r_flee:
                 continue
@@ -224,7 +236,7 @@ class World:
             if len(body) and (torus_dist(body, p, self.size) < radius + self.cfg.body_radius).any():
                 continue
             return p
-        return self.rng.uniform([0, 0], self.size)
+        return best                                   # exhausted: furthest-from-any-obstacle point, never inside one
 
     def maybe_spawn(self):
         c = self.cfg

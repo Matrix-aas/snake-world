@@ -48,6 +48,17 @@ def test_ids_stable_across_eat():
     assert list(w.chicken_id) == [survivor_id]        # survivor keeps its id after reindex
 
 
+def test_chicken_never_enters_obstacle():
+    w = World(CFG, seed=1, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.obstacle_pos = np.array([[40.0, 30.0]]); w.obstacle_r = np.array([3.0]); w.obstacle_kind = np.array([0])
+    w.set_chickens([[34.0, 30.0]])                    # close to snake -> flees +x straight at the rock
+    for _ in range(30):
+        w.update_chickens()
+        d = np.linalg.norm(w.chicken_pos[0] - np.array([40.0, 30.0]))
+        assert d >= w.obstacle_r[0] + CFG.chicken_radius - 1e-6   # blocked at the rock surface, never inside
+
+
 def test_nearest_chicken():
     w = World(CFG, seed=1, size=(60, 60)); w.head = np.array([1.0, 1.0])
     w.set_chickens([[59.0, 1.0], [5.0, 1.0]])

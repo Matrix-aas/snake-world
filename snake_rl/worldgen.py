@@ -19,8 +19,8 @@ def generate_world(cfg, seed=None):
         if pos and (torus_dist(np.array(pos), p, w.size) < np.array(rad) + r + 1.0).any():
             continue
         pos.append(p); rad.append(r); kind.append(int(rng.integers(0, 2)))
-    w.obstacle_pos = np.array(pos); w.obstacle_r = np.array(rad)
-    w.obstacle_kind = np.array(kind, dtype=int)
+    w.obstacle_pos = np.array(pos, float).reshape(-1, 2); w.obstacle_r = np.array(rad, float).reshape(-1)
+    w.obstacle_kind = np.array(kind, dtype=int).reshape(-1)
     # initial chickens
     k = int(rng.integers(1, cfg.max_chickens + 1))
     for _ in range(k):

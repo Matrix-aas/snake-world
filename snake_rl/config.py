@@ -73,6 +73,9 @@ def assert_invariants(cfg: Config) -> None:
     # (4) self-collision must be physically reachable: tightest full curl fits within the body length
     turn_circumference = 2 * math.pi * cfg.v_snake / math.radians(cfg.turn_deg)
     assert turn_circumference < cfg.length_cap, "turn radius too wide for the body to curl onto itself"
+    # (5) nearest-image raycast is only valid if no second image is reachable within ray range
+    assert cfg.ray_range + cfg.obstacle_radius_max < cfg.world_size_min / 2, \
+        "ray_range too large for nearest-image raycasting on the smallest world"
 
 
 CFG = Config()
