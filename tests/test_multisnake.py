@@ -41,3 +41,21 @@ def test_n1_trajectory_regression():
     assert np.isfinite(heads).all()
     seg = np.linalg.norm(np.diff(heads, axis=0), axis=1)
     assert (seg > 0).all()
+
+
+def test_two_phase_step_is_order_independent_head_to_head():
+    # Two snakes driven head-on into each other die together regardless of list order.
+    w = World(CFG, seed=2, size=(80.0, 80.0))
+    from snake_rl.world import Snake
+    from snake_rl.world import wrap
+    import numpy as np
+    a = w.snakes[0]
+    a.head_uw = np.array([40.0, 40.0]); a.head = wrap(a.head_uw, w.size)
+    a.heading = 0.0; a.path_uw = [a.head_uw.copy()]; a._prev_head_uw = a.head_uw.copy()
+    b = Snake(head_uw=np.array([43.0, 40.0]), head=wrap(np.array([43.0,40.0]), w.size),
+              heading=np.pi, path_uw=[np.array([43.0,40.0])], target_length=CFG.start_length,
+              stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0,40.0]), id=1)
+    w.snakes.append(b)
+    # will be lethal once Task 4 wires _other_hazard; here assert the step runs both moves first
+    out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
+    assert w.snakes[0].steps == 1 and w.snakes[1].steps == 1   # BOTH moved (phase 1) before any resolve

@@ -310,24 +310,38 @@ class World:
         self._add_chicken(self._free_point(self.cfg.chicken_radius))
 
     # --- collisions & full step ---
-    def _check_death(self, s):
-        # swept head segment [prev_head -> head]; body_points_uw already skips the neck (see body_points_uw)
-        p0 = s._prev_head_uw
-        p1 = s.head_uw
-        hr = self.cfg.head_radius
-        if len(self.obstacle_pos):
-            hit = segment_circle_hit(wrap(p0, self.size), wrap(p1, self.size),
-                                     self.obstacle_pos, self.obstacle_r + hr, self.size)
-            if hit.any():
-                s.alive = False; s.death_cause = "obstacle"
-                return True
-        body = self._body_points_uw(s)
-        if len(body):
-            hit = segment_circle_hit(p0, p1, body,
-                                     np.full(len(body), self.cfg.body_radius + hr), self.size)
-            if hit.any():
-                s.alive = False; s.death_cause = "self"
-                return True
+    def _other_hazard(self, s):
+        pts, rads = [], []
+        for o in self.snakes:
+            if o is s or not o.alive:
+                continue
+            pts.append(o.head_uw); rads.append(self.cfg.head_radius)   # head (head_radius)
+            body = self._body_render_path_uw(o)[1:]    # dense body, NO neck skip; skip idx-0 head (added above)
+            if len(body):
+                pts.extend(body); rads.extend([self.cfg.body_radius] * len(body))
+        if not pts:
+            return np.zeros((0, 2)), np.zeros((0,))
+        return np.array(pts), np.array(rads)
+
+    def _death_cause(self, s):
+        """Pure — returns 'obstacle'|'self'|None (Task 4 adds 'snake') for s vs post-move state. No mutation."""
+        c = self.cfg; hr = c.head_radius
+        p0, p1 = s._prev_head_uw, s.head_uw
+        if len(self.obstacle_pos) and segment_circle_hit(
+                wrap(p0, self.size), wrap(p1, self.size), self.obstacle_pos, self.obstacle_r + hr,
+                self.size).any():
+            return "obstacle"
+        body = self._body_points_uw(s)                 # self set KEEPS the neck-skip
+        if len(body) and segment_circle_hit(
+                p0, p1, body, np.full(len(body), c.body_radius + hr), self.size).any():
+            return "self"
+        return None
+
+    def _check_death(self, s):                         # wrapper: decide + apply (single-snake / proxy use)
+        cause = self._death_cause(s)
+        if cause:
+            s.alive = False; s.death_cause = cause
+            return True
         return False
 
     # --- ego proxies (temporary Milestone-A bridge; reworked in Milestone B) ---
@@ -342,14 +356,26 @@ class World:
     def body_render_path_uw(self, spacing=None):
         return self._body_render_path_uw(self.snakes[0], spacing)
 
-    def step(self, steering, dash):
-        dashed = self.move(steering, dash)
+    def step(self, steering, dash, opponent_fn=None):
+        opponent_fn = opponent_fn or (lambda world, s: (1, 0))
+        # phase 1: move ALL live snakes
+        ego = self.snakes[0]
+        ego_dashed = self._move_snake(ego, steering, dash) if ego.alive else False
+        for o in self.snakes[1:]:
+            if o.alive:
+                st, da = opponent_fn(self, o)
+                self._move_snake(o, st, da)
+        # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
+        dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]
+        for s, cause in dying:
+            s.alive = False; s.death_cause = cause     # Task 6 adds: self._spawn_corpse(s)
+        deaths = [s.id for s, _ in dying]
+        # phase 3: world updates (chickens/eat/energy/spawn) — ego-centric for now
         self.update_chickens()
         ate = self.try_eat()
         self.decay_energy()
         self.maybe_spawn()
-        died = self.check_death()
-        return {"ate": ate, "died": died, "dashed": dashed}
+        return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths}
 
 
 def _ego_prop(name):
