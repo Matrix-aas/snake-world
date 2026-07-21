@@ -1,4 +1,5 @@
 """pygame renderer: supersampled AA, torus-aware, shadows/vignette, continuous tapering snake."""
+import colorsys
 import numpy as np
 import pygame
 from .sensors import vision_distances
@@ -11,11 +12,29 @@ BG = (15, 17, 24); GRID = (24, 28, 40)
 ROCK = (110, 112, 122); ROCK_HI = (156, 158, 168); ROCK_SH = (60, 62, 72)
 TRUNK = (98, 68, 44); LEAF = (54, 132, 72); LEAF2 = (84, 174, 104)
 CHICK = (247, 243, 231); CHICK_SH = (206, 200, 184); BEAK = (242, 168, 62); EYE = (26, 26, 30); COMB = (226, 74, 74)
-SNAKE_HEAD = (128, 224, 158); SNAKE_TAIL = (30, 100, 86); SNAKE_RIM = (16, 40, 34)
+SNAKE_RIM = (16, 40, 34)
 SNAKE_GLOSS = (196, 252, 214); SNAKE_EYE = (250, 250, 250); PUPIL = (16, 20, 18)
 TONGUE = (236, 74, 96)
+EGG_SHELL = (236, 224, 196); EGG_SHADE = (206, 188, 150); EGG_TEXT = (30, 26, 20)
+CORPSE = (92, 74, 58)
+RING_TRACK = (44, 48, 58)
 RAY_NONE = (70, 92, 120); RAY_OBST = (226, 96, 84); RAY_CHICK = (240, 208, 96); RAY_SELF = (168, 128, 224)
-RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF}
+RAY_OTHER = (110, 200, 240); RAY_EGG = (240, 176, 224)          # B2 ray kinds 3=other_body, 4=egg
+RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG}
+
+
+def color_for(seed, s=0.55, v=0.92):
+    """Golden-angle hue palette: deterministic and visually distinct per integer seed,
+    so a snake keeps a stable, distinguishable color across frames (snake.color_seed)."""
+    hue = (seed * 137.5) % 360
+    r, g, b = colorsys.hsv_to_rgb(hue / 360.0, s, v)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _snake_colors(seed):
+    """Head/tail gradient endpoints derived from the snake's hue (mirrors the old fixed-green
+    SNAKE_HEAD/SNAKE_TAIL look, just re-tinted per snake)."""
+    return color_for(seed, s=0.42, v=0.96), color_for(seed, s=0.80, v=0.42)
 
 
 def _lerp(a, b, t):
@@ -155,36 +174,93 @@ class Renderer:
                 alive.append([pos, age + 1])
         self._flashes = alive
 
-    def _draw_snake(self, world, body_uw):
+    def _draw_snake(self, world, snake, body_uw, big=False):
         n = len(body_uw)
         hr = world.cfg.head_radius
+        head_c, tail_c = _snake_colors(snake.color_seed)
         wpts = [wrap(body_uw[k], world.size) for k in range(n)]
         radii = [hr * (1 - k / max(1, n - 1)) + world.cfg.body_radius * 0.7 * (k / max(1, n - 1)) for k in range(n)]
         for k in range(n - 1, -1, -1):                     # rim pass
             self._circle(SNAKE_RIM, wpts[k], max(3, int((radii[k] + 0.28) * self._scale)))
         for k in range(n - 1, -1, -1):                     # body pass
-            self._circle(_lerp(SNAKE_HEAD, SNAKE_TAIL, k / max(1, n - 1)), wpts[k], max(2, int(radii[k] * self._scale)))
+            self._circle(_lerp(head_c, tail_c, k / max(1, n - 1)), wpts[k], max(2, int(radii[k] * self._scale)))
         for k in range(min(n, n * 3 // 4) - 1, -1, -1):    # gloss highlight (front ~3/4)
             self._circle(SNAKE_GLOSS, wpts[k] - np.array([hr * 0.18, hr * 0.22]), max(1, int(radii[k] * 0.34 * self._scale)))
         head = wpts[0]
-        d = body_uw[0] - body_uw[1] if n > 1 else world.heading_vec()
-        nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else world.heading_vec()
+        d = body_uw[0] - body_uw[1] if n > 1 else snake.heading_vec()
+        nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else snake.heading_vec()
         perp = np.array([-d[1], d[0]])
-        flick = world.dashed or (self._t % 48 < 6)         # tongue out on a dash, and a periodic idle flick
+        flick = snake.dashed or (self._t % 48 < 6)         # tongue out on a dash, and a periodic idle flick
         if flick:                                          # forked tongue tasting the air
-            reach = 1.35 if world.dashed else 1.15
+            reach = 1.35 if snake.dashed else 1.15
             tip = head + d * hr * reach; base = head + d * hr * 0.9
             pygame.draw.line(self.canvas, TONGUE, self._p(base), self._p(tip), max(2, int(0.14 * self._scale)))
-            for s in (1, -1):
-                pygame.draw.line(self.canvas, TONGUE, self._p(tip), self._p(tip + (d * 0.45 + perp * 0.45 * s) * hr), max(2, int(0.12 * self._scale)))
-        for s in (1, -1):                                  # eyes
-            e = head + d * hr * 0.32 + perp * hr * 0.46 * s
+            for s2 in (1, -1):
+                pygame.draw.line(self.canvas, TONGUE, self._p(tip), self._p(tip + (d * 0.45 + perp * 0.45 * s2) * hr), max(2, int(0.12 * self._scale)))
+        for s2 in (1, -1):                                 # eyes
+            e = head + d * hr * 0.32 + perp * hr * 0.46 * s2
             pygame.draw.circle(self.canvas, SNAKE_EYE, self._p(e), max(2, int(hr * 0.3 * self._scale)))
             pygame.draw.circle(self.canvas, PUPIL, self._p(e + d * hr * 0.13), max(1, int(hr * 0.15 * self._scale)))
 
-    def _draw_sensors(self, world, head_uw, heading):
+    def _ring_hud(self, world, snake, big=False):
+        """Per-snake 3-ring concentric badge floating above the head: outer=energy, middle=stamina,
+        inner=length->length_cap, each a filling arc tinted the snake's color. The followed/ego
+        snake gets a larger version -- replaces the old single-snake bar HUD (doesn't scale to 6)."""
+        c = world.cfg
+        color = color_for(snake.color_seed)
+        hr = c.head_radius
+        r_out = hr * (2.4 if big else 1.6)
+        step = r_out * 0.3
+        center = wrap(snake.head, world.size) + np.array([0.0, -(r_out + hr * 1.3)])
+        p = self._p(center)
+        lw = max(2, int((0.22 if big else 0.15) * self._scale))
+        fracs = (np.clip(snake.energy / c.energy_max, 0.0, 1.0),
+                 np.clip(snake.stamina / c.s_max, 0.0, 1.0),
+                 np.clip(snake.target_length / c.length_cap, 0.0, 1.0))
+        for i, frac in enumerate(fracs):
+            r_px = max(3, int((r_out - i * step) * self._scale))
+            pygame.draw.circle(self.canvas, RING_TRACK, p, r_px, max(1, lw // 2))
+            if frac > 0.01:
+                start = -np.pi / 2
+                end = start + float(frac) * 2 * np.pi
+                rect = pygame.Rect(p[0] - r_px, p[1] - r_px, 2 * r_px, 2 * r_px)
+                pygame.draw.arc(self.canvas, color, rect, start, end, lw)
+
+    def _draw_eggs(self, world):
+        e = world.eggs
+        if not len(e["pos"]):
+            return
+        c = world.cfg
+        pulse = 0.85 + 0.15 * np.sin(self._t * 0.15)
+        for pos, timer in zip(e["pos"], e["timer"]):
+            p = wrap(pos, world.size)
+            r = c.egg_radius * pulse
+            rp = max(2, int(r * self._scale))
+            self._shadow(p, rp)
+            self._circle(EGG_SHELL, p, rp)
+            self._circle(EGG_SHADE, p + np.array([-r * 0.28, -r * 0.28]), max(1, int(rp * 0.45)))
+            label = self.font.render(str(max(0, int(timer))), True, EGG_TEXT)
+            lp = self._p(p)
+            self.canvas.blit(label, (lp[0] - label.get_width() // 2, lp[1] - label.get_height() // 2))
+
+    def _draw_corpses(self, world):
+        corpses = world.corpses
+        if not len(corpses["pos"]):
+            return
+        cfg = world.cfg
+        for pos, food in zip(corpses["pos"], corpses["food"]):
+            p = wrap(pos, world.size)
+            n_piles = max(1, min(4, int(food / max(1.0, cfg.corpse_food_per_length * 2)) + 1))
+            r = max(0.6, min(2.5, food / (cfg.corpse_food_per_length * 6)))
+            rp = max(2, int(r * self._scale))
+            self._shadow(p, rp)
+            offs = [(0, 0), (-0.5, 0.35), (0.5, 0.3), (-0.15, -0.4)][:n_piles]
+            for ox, oy in offs:
+                self._circle(CORPSE, p + np.array([ox, oy]) * r, max(1, int(rp * 0.6)))
+
+    def _draw_sensors(self, world, head_uw, heading, snake=None):
         head = wrap(head_uw, world.size)
-        dirs, dist, kinds = vision_distances(world, head, heading)
+        dirs, dist, kinds = vision_distances(world, head, heading, snake)
         for u, dd, kd in zip(dirs, dist, kinds):
             nseg = max(2, int(dd))
             pts = [np.asarray(self._p(wrap(head + u * (dd * k / nseg), world.size))) for k in range(nseg + 1)]
@@ -195,36 +271,40 @@ class Renderer:
             if kd != -1:
                 pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
 
-    def _bar(self, x, y, w, h, frac, color, label):
-        pygame.draw.rect(self.display, (0, 0, 0), (x - 1, y - 1, w + 2, h + 2))
-        pygame.draw.rect(self.display, (48, 52, 62), (x, y, w, h))
-        pygame.draw.rect(self.display, color, (x, y, int(w * max(0.0, min(1.0, frac))), h))
-        self.display.blit(self.font.render(label, True, (230, 233, 240)), (x + w + 8, y - 2))
-
-    def _hud(self, world):
-        c = world.cfg
-        panel = pygame.Surface((250, 92), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 120))
-        self.display.blit(panel.convert_alpha(), (8, 8))
-        self.display.blit(self.font.render(f"length {world.target_length:.0f}", True, (228, 231, 238)), (18, 16))
-        self._bar(18, 40, 150, 12, world.stamina / c.s_max, (90, 210, 250), "dash")     # reserve for the pounce
-        self._bar(18, 62, 150, 12, world.energy / c.energy_max, (240, 190, 90), "food")  # hunger
-
-    def draw(self, world, body_uw=None, chick_pos=None, chick_dir=None):
+    def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None):
+        """Draw every live snake in `world.snakes` (golden-angle colors + ring HUD), eggs, corpses.
+        `bodies`: optional {snake_id: unwrapped body polyline} (e.g. interpolated) -- falls back to
+        the world's current path for any snake not in the dict. `follow_id`: which snake gets the
+        larger ring HUD and the sensor overlay (defaults to slot-0; None picks slot-0 too -- an
+        explicit "no one alive" overview is the caller's job, drawing just skips dead snakes)."""
         self._t += 1
         self._ensure(world)
-        if body_uw is None:
-            body_uw = world.body_render_path_uw()
         if chick_pos is None:
             chick_pos, chick_dir = world.chicken_pos, world.chicken_dir
         self._bg()
         self._draw_obstacles(world)
         self._draw_chickens(world, chick_pos, chick_dir)
+        self._draw_eggs(world)
+        self._draw_corpses(world)
         self._draw_flashes()
-        self._draw_snake(world, body_uw)
-        if self.show_sensors:
-            d = body_uw[0] - body_uw[1] if len(body_uw) > 1 else world.heading_vec()
-            self._draw_sensors(world, body_uw[0], float(np.arctan2(d[1], d[0])))
+        follow = follow_id if follow_id is not None else world.snakes[0].id
+        sensor_snake = None
+        for s in world.snakes:
+            if not s.alive:
+                continue
+            big = (s.id == follow)
+            b = (bodies or {}).get(s.id)
+            if b is None:
+                b = world._body_render_path_uw(s)
+            self._draw_snake(world, s, b, big=big)
+            self._ring_hud(world, s, big=big)
+            if big:
+                sensor_snake = (s, b)
+        if self.show_sensors and sensor_snake is not None:
+            s, b = sensor_snake
+            d = b[0] - b[1] if len(b) > 1 else s.heading_vec()
+            nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else s.heading_vec()
+            self._draw_sensors(world, b[0], float(np.arctan2(d[1], d[0])), s)
         # Blit into the window via a temp surface (writing straight into the window surface
         # renders black on some backends). At SS=1 the canvas is already display-sized.
         if self._ss == 1:
@@ -232,7 +312,6 @@ class Renderer:
         else:
             self.display.blit(pygame.transform.smoothscale(self.canvas, (self.dw, self.dh)), (0, 0))
         self.display.blit(self._vignette, (0, 0))
-        self._hud(world)
         pygame.display.flip()
 
     def toggle_sensors(self):
