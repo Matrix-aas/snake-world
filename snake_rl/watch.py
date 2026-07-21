@@ -168,8 +168,10 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, deter
                 while since >= interval:
                     since -= interval
                     action, _ = model.predict(obs, deterministic=deterministic)
-                    obs, _, done, _ = vec.step(action)
+                    obs, _, done, infos = vec.step(action)
                     world = _world_of(vec)
+                    if not done[0] and infos[0].get("ate", 0):
+                        renderer.add_flash(world.head.copy())   # catch effect at the strike
                     prev_body, prev_ch = cur_body, cur_ch
                     cur_body, cur_ch = snapshot(world)
                     if done[0]:                              # autoreset already gave a fresh world

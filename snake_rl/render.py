@@ -35,6 +35,7 @@ class Renderer:
         self._ss = SS
         self._world_key = None
         self._t = 0                # frame counter for idle animation (periodic tongue flicks)
+        self._flashes = []         # transient catch effects: [wrapped_pos, age]
         self.font = pygame.font.SysFont("menlo,consolas,monospace", 15)
         self._sprite_cache = {}
         self._vignette = None
@@ -138,6 +139,22 @@ class Renderer:
             pygame.draw.circle(self.canvas, BEAK, self._p(cpos + d * cr * 0.95), max(2, int(cr * 0.32 * self._scale)))
             pygame.draw.circle(self.canvas, EYE, self._p(cpos + d * cr * 0.3 + perp * cr * 0.35), max(1, int(cr * 0.2 * self._scale)))
 
+    def add_flash(self, pos):
+        """Register a catch effect (an expanding ring) at a wrapped world position."""
+        self._flashes.append([np.asarray(pos, float).copy(), 0])
+
+    def _draw_flashes(self):
+        alive = []
+        for pos, age in self._flashes:
+            t = age / 15.0
+            col = _lerp((255, 244, 180), BG, t)
+            r = int((1.4 + age * 0.6) * self._scale)
+            p = self._p(pos)
+            pygame.draw.circle(self.canvas, col, p, r, max(1, int(0.16 * self._scale)))
+            if age < 15:
+                alive.append([pos, age + 1])
+        self._flashes = alive
+
     def _draw_snake(self, world, body_uw):
         n = len(body_uw)
         hr = world.cfg.head_radius
@@ -203,6 +220,7 @@ class Renderer:
         self._bg()
         self._draw_obstacles(world)
         self._draw_chickens(world, chick_pos, chick_dir)
+        self._draw_flashes()
         self._draw_snake(world, body_uw)
         if self.show_sensors:
             d = body_uw[0] - body_uw[1] if len(body_uw) > 1 else world.heading_vec()
