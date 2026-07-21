@@ -16,7 +16,7 @@ def _two_fed_snakes(w, d=2.0):
 
 def test_mating_lays_egg_after_streak_and_costs_energy():
     w = World(CFG, seed=6, size=(80.0, 80.0))
-    a, b = _two_fed_snakes(w, d=2.0)                        # within r_mate (4.0)
+    a, b = _two_fed_snakes(w, d=2.0)                        # within r_mate (CFG.r_mate)
     for _ in range(CFG.mate_steps):
         w._resolve_mating()
     assert w.eggs["pos"].shape[0] == 1

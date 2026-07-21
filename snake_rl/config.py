@@ -45,7 +45,10 @@ class Config:
     s_max: float = 30.0
     stamina_drain: float = 1.0
     # HARD (final) stamina: dash needs a full-unit reserve, refills slowly -> deliberate bursts
-    stamina_regen: float = 0.3       # refills the reserve in ~100 steps: fast enough to hunt, slow enough to matter
+    # 0.42 (was 0.3, ecosystem-sustain tuning): more energy surplus for the persistent world's
+    # mating economy; still a real reserve, just less starved for it. Runtime-only change (not
+    # observed) -- safe for the already-trained model, see CLAUDE.md.
+    stamina_regen: float = 0.42      # refills the reserve in ~70 steps: fast enough to hunt, slow enough to matter
     dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
     # EASY (warmup) stamina: cheap, always-available dash so the agent can first LEARN to hunt
     stamina_regen_easy: float = 0.6
@@ -71,11 +74,16 @@ class Config:
     length_cap: float = 24.0         # > tightest-curl circumference (~22.5) so self-collision is reachable, < world/2
     # reproduction / eggs / corpses
     repro_energy_frac: float = 0.7   # min energy fraction to qualify for mating
-    repro_length_min: float = 10.0   # min body length to qualify for mating
-    r_mate: float = 4.0              # mating distance
-    mate_steps: int = 4              # steps two qualified snakes must hold mating distance
-    repro_cost: float = 30.0         # energy spent by each parent on a successful mating
-    repro_cooldown: int = 120        # steps before a snake can mate again
+    # Eased vs. the values the shipped model trained under (ecosystem-sustain tuning, all
+    # runtime-only -- none of these are observed, so the trained model adapts without a retrain):
+    # repro_length_min 10.0->8.0, r_mate 4.0->7.0, mate_steps 4->2, repro_cost 30.0->18.0,
+    # repro_cooldown 120->80. Makes organic mating easier to trigger and afford in the persistent
+    # multi-snake world so births can keep pace with deaths.
+    repro_length_min: float = 8.0    # min body length to qualify for mating
+    r_mate: float = 7.0              # mating distance
+    mate_steps: int = 2              # steps two qualified snakes must hold mating distance
+    repro_cost: float = 18.0         # energy spent by each parent on a successful mating
+    repro_cooldown: int = 80         # steps before a snake can mate again
     egg_timer: int = 45              # steps until an egg hatches
     hatch_energy_frac: float = 0.5   # hatchling starting energy fraction
     egg_food: float = 25.0           # food value if an egg is eaten instead of hatching

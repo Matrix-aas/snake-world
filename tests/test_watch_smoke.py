@@ -3,7 +3,7 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import numpy as np
 from snake_rl.config import CFG
 from snake_rl.train import train
-from snake_rl.watch import rollout_once, run_headless, _step_world, _load_model
+from snake_rl.watch import rollout_once, run_headless, _step_world, _reseed_floor, _load_model
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
 from stable_baselines3 import PPO
@@ -34,6 +34,27 @@ def test_persistent_world_does_not_reset_on_non_ego_death():
         _step_world(w, ctrl)                        # ...and the SAME world keeps running (no reset)
     assert victim.alive is False                    # still dead, never respawned by a reset
     assert victim not in w.snakes                   # a dead non-ego opponent is pruned, not reset
+
+
+def test_reseed_floor_keeps_population_above_the_sustain_floor():
+    # Screensaver guarantee: wipe out the whole population and step once -- _step_world (via
+    # _reseed_floor) must top it back up to n_start_min rather than leaving the world empty.
+    w = generate_world(CFG, seed=9, size=(140.0, 140.0), n_snakes=CFG.n_start_min)
+    ctrl = OpponentController(CFG)          # unsynced -> straight-line actor, deterministic
+    for s in w.snakes:
+        s.alive = False
+    assert sum(1 for s in w.snakes if s.alive) == 0
+    _step_world(w, ctrl)
+    assert sum(1 for s in w.snakes if s.alive) >= CFG.n_start_min
+
+
+def test_reseed_floor_is_a_noop_above_the_floor():
+    # Above the floor, _reseed_floor must not add anyone -- natural population dynamics dominate.
+    w = generate_world(CFG, seed=9, size=(140.0, 140.0), n_snakes=CFG.n_start_min)
+    ctrl = OpponentController(CFG)
+    n_before = len(w.snakes)
+    _reseed_floor(w, ctrl)
+    assert len(w.snakes) == n_before
 
 
 def test_run_headless_returns_ecosystem_metrics_dict(tmp_path):

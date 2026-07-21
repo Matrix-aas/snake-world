@@ -142,6 +142,20 @@ Every one of these cost real training runs. Do not rediscover them.
     (env stepping and the eval compete for the 8 perf cores). Monitor with cheap `grep`s, not
     heavy scripts, or expect a slower run. Kill stray runs with `pkill -f "snake_rl train"`;
     orphaned `forkserver` workers linger and slow everything (`pgrep -f forkserver`).
+13. **A persistent multi-snake world (never resets) can go EXTINCT — births < deaths at full
+    hardness.** The trained model is a strong hunter but a rare breeder once the stamina reserve
+    is tight (0–2 matings per training window), so left alone the population decays to 0. Two
+    independent fixes, both runtime-only (no retrain needed — mating/stamina constants are NOT
+    observed, so the already-trained policy adapts fine to new values): (a) `watch._reseed_floor`
+    — called every `_step_world` tick — spawns a fresh snake, placed like a hatchling via
+    `World._free_point`, whenever the live count drops below `cfg.n_start_min`; a hard floor, inert
+    above it. (b) Eased the *hard* (post-curriculum) mating constants in `config.py` — `r_mate`,
+    `mate_steps`, `repro_cost`, `repro_length_min`, `repro_cooldown`, plus a softer `stamina_regen`
+    — so organic mating fires more often in the persistent world. **Config constants that aren't
+    in the observation are safe to retune post-training** — the policy never sees them directly, it
+    only feels their effect (e.g. stamina recovers a bit faster) and it already generalizes across
+    a range of these values from curriculum annealing. Don't extend this reasoning to anything the
+    obs vector encodes (see Sensors row): those DO need a retrain.
 
 ---
 
@@ -157,9 +171,14 @@ All tunable numbers live in one frozen `Config`. `assert_invariants(cfg)` runs a
 5. `ray_range + obstacle_radius_max + head_radius < world_size_min/2` — nearest-image raycast is valid.
 6. `length_cap < world_size_min/2` — the body never wraps the torus onto its own head.
 
-Current tuned values that produce the shipped model: `gamma 0.99`, `r_flee 12`, `stamina_regen
-0.3`, `dash_min_stamina 1.0`, `min_chickens 3 / max 5`, `hardness_warmup 0.42 / full 0.85`,
-`dash_penalty 0`. Easy (warmup) stamina: `dash_min_stamina_easy 0.05`, `stamina_regen_easy 0.6`.
+Values that TRAINED the shipped model (`gamma 0.99`, `r_flee 12`, `dash_min_stamina 1.0`,
+`min_chickens 3 / max 5`, `hardness_warmup 0.42 / full 0.85`, `dash_penalty 0`; easy warmup
+stamina `dash_min_stamina_easy 0.05`, `stamina_regen_easy 0.6`) are still current — these ARE
+observed (indirectly, via proprioception/behavior) or shape the curriculum, so don't retune them
+without a retrain. The **hard-endpoint mating/stamina** constants were eased AFTER training for
+ecosystem sustainability in the persistent viewer world (Pitfall 13, runtime-only, no retrain):
+`stamina_regen 0.3→0.42`, `r_mate 4.0→7.0`, `mate_steps 4→2`, `repro_cost 30.0→18.0`,
+`repro_length_min 10.0→8.0`, `repro_cooldown 120→80`.
 
 ---
 

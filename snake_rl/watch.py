@@ -7,7 +7,7 @@ from stable_baselines3 import PPO
 from .config import CFG
 from .train import build_vec
 from .render import Renderer
-from .world import wrap, torus_delta
+from .world import wrap, torus_delta, Snake
 from .worldgen import generate_world
 from .selfplay import OpponentController
 from .sensors import OBS_DIM
@@ -70,16 +70,43 @@ def _new_ecosystem(model_path, seed, world_size=None):
     return model, controller, world
 
 
+def _reseed_floor(world, controller):
+    """Screensaver guarantee: a persistent world never resets, so a bad run of deaths can empty
+    it for good. If the live population falls below the sustain floor (cfg.n_start_min), spawn
+    fresh snake(s) -- placed like worldgen's initial multi-snake spawn via `_free_point`, driven
+    by the SAME synced brain -- to bring it back up to the floor. A no-op above the floor, so
+    natural birth/death dynamics dominate whenever the population is healthy."""
+    c = world.cfg
+    n_alive = sum(1 for s in world.snakes if s.alive)
+    while n_alive < c.n_start_min:
+        p = world._free_point(c.head_radius)
+        if p is None:                  # near-packed world (worldgen's own generation avoids this)
+            break
+        sid = world._next_snake_id
+        world._next_snake_id += 1
+        world.snakes.append(Snake(
+            head_uw=p.copy(), head=wrap(p, world.size),
+            heading=float(world.rng.uniform(0, 2 * np.pi)), path_uw=[p.copy()],
+            target_length=c.start_length, stamina=c.s_max, energy=c.energy_max,
+            _prev_head_uw=p.copy(), id=sid, color_seed=sid,
+        ))
+        controller.reset_snake(sid)     # fresh ring, not a stale/reused one
+        n_alive += 1
+
+
 def _step_world(world, controller):
     """Advance the persistent world one tick. EVERY snake -- including the nominal slot-0 'ego'
     left over from the single-snake days -- is driven by the SAME synced policy through the
     controller; no SB3 stepping, no autoreset. Drops a dead snake's frame ring so a later
-    hatchling reusing that id starts cold (mirrors env.py's per-death ring reset)."""
+    hatchling reusing that id starts cold (mirrors env.py's per-death ring reset). Then tops the
+    population back up to the sustain floor if this step dropped it below (see _reseed_floor) --
+    run_watch's gore diff snapshots BEFORE this call, so a reseed reads as a hatch effect for free."""
     ego = world.snakes[0]
     steer, dash = controller.act(world, ego) if ego.alive else (1, 0)
     out = world.step(steer, dash, opponent_fn=lambda w, s: controller.act(w, s))
     for sid, _cause in out["deaths_detailed"]:
         controller.reset_snake(sid)
+    _reseed_floor(world, controller)
     return out
 
 
