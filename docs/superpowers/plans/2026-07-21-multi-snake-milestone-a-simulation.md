@@ -13,7 +13,7 @@
 - Run tests: `SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest -q` (all 57 existing tests must stay green after every task).
 - **Torus nearest-image geometry everywhere** — reuse `world.torus_delta / torus_dist / ray_circle_hit / segment_circle_hit`; never write raw subtraction for pairwise vectors.
 - Simulation timestep `dt = 1`; all speeds in units/step.
-- **N=1 behavioral regression is exact:** a world built with `n_snakes=1` at a fixed explicit size + seed must produce a byte-identical trajectory to the pre-refactor code. Regression tests pin `size=(80.0, 80.0)` explicitly so later world-size balance changes don't perturb them.
+- **N=1 physics must be preserved exactly.** The refactor is behavior-preserving for a single snake. The **exactness guard is the existing pinned test suite** (`test_snake_motion`: `|speed − v_snake| < 1e-6` + exact segment spacing; `test_collision`: self-collision reachability + straight-motion regression) — those must stay green unchanged. `test_n1_trajectory_regression` (Task 1) is only a determinism/no-stall smoke check, not the exactness proof. Tests that build worlds pin `size=(80.0, 80.0)` explicitly so the Task-5 world-size bump doesn't perturb them.
 - `Config` is a **frozen** dataclass — population-dependent food is stored as *per-snake rates*; the live target is computed at runtime in `maybe_spawn`. Never store an absolute dynamic count as a config field.
 - **Ego-proxy bridge is deliberate and temporary** — documented in `world.py`; Milestone B removes/reworks it when `sensors` becomes multi-snake. Do not build sensors/env multi-snake logic here.
 - No attribution lines in commits (per user global rule).
@@ -43,8 +43,11 @@
     repro_cooldown: int` (defaults: `alive=True, dashed=False, death_cause=None, steps=0,
     repro_cooldown=0`).
   - `World.snakes: list[Snake]` (length ≥ 1; `snakes[0]` is the ego).
-  - Ego **read proxies** (properties on `World`) → `snakes[0]`: `head_uw, head, heading,
-    target_length, stamina, energy, alive, dashed, death_cause, steps, path_uw, _prev_head_uw`.
+  - Ego **read/write proxies** (properties WITH setters on `World`) → `snakes[0]`: `head_uw, head,
+    heading, target_length, stamina, energy, alive, dashed, death_cause, steps, path_uw,
+    _prev_head_uw`. **Setters are mandatory** — existing tests assign `w.head=…`, `w.stamina=…`,
+    etc., and `try_eat`/`decay_energy` self-assign `self.energy`/`self.target_length`; a getter-only
+    property would raise `AttributeError` on every such assignment (~36 in the suite).
   - Ego **method proxies**: `heading_vec()`, `move(steering, dash)`, `check_death()`,
     `body_points()`, `body_points_uw()`, `body_render_path_uw(spacing=None)`,
     `nearest_chicken()`, `nearest_chicken_id()` — all operate on `snakes[0]`.
@@ -71,6 +74,9 @@ def test_world_has_snake_list_and_ego_proxies():
     assert np.allclose(w.head, s.head)
     assert w.energy == s.energy and w.stamina == s.stamina
     assert w.heading == s.heading
+    # proxies are read/WRITE — assignment must route to snakes[0] (existing tests assign w.head, w.stamina, ...)
+    w.stamina = 5.0; assert w.snakes[0].stamina == 5.0
+    w.energy = 7.0;  assert w.snakes[0].energy == 7.0
 
 
 def test_ego_move_proxy_mutates_snakes0():
@@ -82,15 +88,17 @@ def test_ego_move_proxy_mutates_snakes0():
 
 
 def test_n1_trajectory_regression():
-    # Refactor must be behavior-preserving: a fixed seed+size world stepped straight
-    # yields a deterministic head path. This pins the ego physics.
+    # Determinism/smoke: a fixed seed+size world stepped straight advances finitely each step.
+    # NOTE: exact byte-for-byte physics preservation is guarded by the EXISTING pinned tests
+    # (test_snake_motion: |speed - v_snake| < 1e-6, exact segment spacing; test_collision:
+    # self-collision reachability). This test only checks the refactor didn't NaN/stall the ego.
     w = generate_world(CFG, seed=12345, size=(80.0, 80.0))
     heads = []
     for _ in range(30):
         w.step(1, 0)                  # steer straight, no dash
+        assert w.snakes[0].alive      # guard: a mid-run death would stall head motion (M3)
         heads.append(w.head.copy())
     heads = np.array(heads)
-    # deterministic + advancing along the heading (no NaN, monotone arc length)
     assert np.isfinite(heads).all()
     seg = np.linalg.norm(np.diff(heads, axis=0), axis=1)
     assert (seg > 0).all()
@@ -161,11 +169,12 @@ Rewrite `move/_prune_path/body_points_uw/body_points/body_render_path_uw/check_d
         return self._body_render_path_uw(self.snakes[0], spacing)
 ```
 
-Add the read proxies via a loop after the class body, or explicit properties:
+Add the read/WRITE proxies via a loop after the class body (setter is required — see interface):
 
 ```python
 def _ego_prop(name):
-    return property(lambda self: getattr(self.snakes[0], name))
+    return property(lambda self: getattr(self.snakes[0], name),
+                    lambda self, v: setattr(self.snakes[0], name, v))
 for _n in World._EGO_ATTRS:
     setattr(World, _n, _ego_prop(_n))
 ```
@@ -189,21 +198,30 @@ git commit -m "world: extract Snake dataclass + ego proxies (N=1 identical)"
 ### Task 2: Two-phase `World.step` for N snakes (move-all → resolve-deaths)
 
 **Files:**
-- Modify: `snake_rl/world.py` (`step`; add `_other_hazard`)
+- Modify: `snake_rl/world.py` (`step`; add `_other_hazard`, `_death_cause`; split `_check_death`)
 - Test: `tests/test_multisnake.py`
 
 **Interfaces:**
 - Consumes: `Snake`, `_move_snake`, `_check_death` (Task 1).
 - Produces:
+  - `World._death_cause(self, s) -> str|None` — **pure** (no mutation): returns `"obstacle" |
+    "self" | None` (Task 4 adds `"snake"`) for snake `s`'s swept head against post-move state. This
+    is the order-independence fix (C2): the phase-2 loop DECIDES all deaths against the frozen
+    post-move state via `_death_cause`, THEN applies them — so mutual head-to-head kills both (a
+    mutating in-loop `_check_death` would let the first death hide the second).
+  - `World._check_death(self, s) -> bool` — thin wrapper: `cause = _death_cause(s); if cause:
+    s.alive=False; s.death_cause=cause; return True; return False`. (Kept for direct single-snake
+    test use + the ego proxy; NOT used inside the phase-2 loop.)
   - `World.step(steering, dash, opponent_fn=None) -> dict` — ego (`snakes[0]`) acts with
     `(steering, dash)`; every other live snake acts via `opponent_fn(world, snake) -> (steering,
-    dash)` (default: go straight `(1, 0)`). **Order:** (1) move all live snakes; (2) resolve all
-    deaths against post-move state; (3) chickens/eat/energy/spawn (unchanged for now). Return dict
-    unchanged for back-compat: `{"ate", "died", "dashed"}` for the ego, plus `{"deaths": [ids]}`.
+    dash)` (default: go straight `(1, 0)`). **Order:** (1) move all live snakes; (2) decide deaths
+    via `_death_cause` against post-move state, then apply; (3) chickens/eat/energy/spawn (unchanged
+    for now). Return `{"ate", "died", "dashed", "deaths": [ids]}` (back-compat for the ego keys).
   - `World._other_hazard(self, s) -> tuple[np.ndarray, np.ndarray]` — `(points, radii)` of every
     **other** live snake's head circle **+ full body with NO neck-skip**. (`s` excluded.) Head
-    point = `other.head_uw`, radius `head_radius`; body points = dense body with radius
-    `body_radius`. Used in Task 4; defined here returning empty arrays while N=1.
+    point = `other.head_uw`, radius `head_radius`; body points = dense body (skipping the render
+    path's index-0 head to avoid double-counting it), radius `body_radius`. Used in Task 4; defined
+    here returning empty arrays while N=1.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -231,7 +249,9 @@ def test_two_phase_step_is_order_independent_head_to_head():
 Run: `... pytest tests/test_multisnake.py::test_two_phase_step_is_order_independent_head_to_head -v`
 Expected: FAIL (`step` takes no `opponent_fn`, or second snake not stepped).
 
-- [ ] **Step 3: Implement two-phase `step` + `_other_hazard` stub**
+- [ ] **Step 3: Split `_check_death` into pure `_death_cause` + wrapper; add `_other_hazard`; two-phase `step`**
+
+Task 1 produced a mutating `_check_death(s)`. Refactor it into a pure decider + a thin wrapper, add `_other_hazard`, and write the decide-then-apply `step`:
 
 ```python
     def _other_hazard(self, s):
@@ -239,13 +259,34 @@ Expected: FAIL (`step` takes no `opponent_fn`, or second snake not stepped).
         for o in self.snakes:
             if o is s or not o.alive:
                 continue
-            pts.append(o.head_uw); rads.append(self.cfg.head_radius)
-            body = self._body_render_path_uw(o)        # dense, NO neck skip, includes head-adjacent
+            pts.append(o.head_uw); rads.append(self.cfg.head_radius)   # head (head_radius)
+            body = self._body_render_path_uw(o)[1:]    # dense body, NO neck skip; skip idx-0 head (added above)
             if len(body):
                 pts.extend(body); rads.extend([self.cfg.body_radius] * len(body))
         if not pts:
             return np.zeros((0, 2)), np.zeros((0,))
         return np.array(pts), np.array(rads)
+
+    def _death_cause(self, s):
+        """Pure — returns 'obstacle'|'self'|None (Task 4 adds 'snake') for s vs post-move state. No mutation."""
+        c = self.cfg; hr = c.head_radius
+        p0, p1 = s._prev_head_uw, s.head_uw
+        if len(self.obstacle_pos) and segment_circle_hit(
+                wrap(p0, self.size), wrap(p1, self.size), self.obstacle_pos, self.obstacle_r + hr,
+                self.size).any():
+            return "obstacle"
+        body = self._body_points_uw(s)                 # self set KEEPS the neck-skip
+        if len(body) and segment_circle_hit(
+                p0, p1, body, np.full(len(body), c.body_radius + hr), self.size).any():
+            return "self"
+        return None
+
+    def _check_death(self, s):                         # wrapper: decide + apply (single-snake / proxy use)
+        cause = self._death_cause(s)
+        if cause:
+            s.alive = False; s.death_cause = cause
+            return True
+        return False
 
     def step(self, steering, dash, opponent_fn=None):
         opponent_fn = opponent_fn or (lambda world, s: (1, 0))
@@ -256,11 +297,11 @@ Expected: FAIL (`step` takes no `opponent_fn`, or second snake not stepped).
             if o.alive:
                 st, da = opponent_fn(self, o)
                 self._move_snake(o, st, da)
-        # phase 2: resolve deaths against post-move state
-        deaths = []
-        for s in self.snakes:
-            if s.alive and self._check_death(s):
-                deaths.append(s.id)
+        # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
+        dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]
+        for s, cause in dying:
+            s.alive = False; s.death_cause = cause     # Task 6 adds: self._spawn_corpse(s)
+        deaths = [s.id for s, _ in dying]
         # phase 3: world updates (chickens/eat/energy/spawn) — ego-centric for now
         self.update_chickens()
         ate = self.try_eat()
@@ -375,15 +416,15 @@ git commit -m "worldgen: spawn N spread snakes (n_snakes param; N=1 unchanged)"
 ### Task 4: Inter-snake cut-off + head-to-head death
 
 **Files:**
-- Modify: `snake_rl/world.py` (`_check_death` includes `_other_hazard`)
+- Modify: `snake_rl/world.py` (`_death_cause` gains the other-snake branch)
 - Test: `tests/test_collision.py`
 
 **Interfaces:**
-- Consumes: `_other_hazard` (Task 2), `_check_death` (Task 1), `segment_circle_hit` (existing).
-- Produces: `_check_death(s)` now also tests the swept head segment `[s._prev_head_uw → s.head_uw]`
-  against `_other_hazard(s)` (radii inflated by `head_radius`); on hit sets `s.alive=False`,
-  `s.death_cause="snake"`. Mutual head-to-head ⇒ both die in the same resolve phase (each sees the
-  other's post-move head as a hazard).
+- Consumes: `_other_hazard` (Task 2), `_death_cause` (Task 2), `segment_circle_hit` (existing).
+- Produces: `_death_cause(s)` now also tests the swept head segment `[s._prev_head_uw → s.head_uw]`
+  against `_other_hazard(s)` (radii inflated by `head_radius`), returning `"snake"` on hit. Because
+  the phase-2 loop calls the **pure** `_death_cause` for all snakes before applying any death (C2),
+  mutual head-to-head ⇒ both die in the same resolve phase (neither is hidden by the other's death).
 
 - [ ] **Step 1: Write the failing test** — append to `tests/test_collision.py`
 
@@ -403,9 +444,7 @@ def test_head_into_other_body_kills_mover():
                      target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
                      _prev_head_uw=np.array([45.0, 46.0]), id=1)
     w.snakes.append(attacker)
-    # attacker's swept head crosses the victim's body line y=40 -> attacker dies, victim lives
-    w.step(1, 0, opponent_fn=lambda world, s: (1, 0))       # ego straight; attacker also straight down via its heading? use direct check:
-    # deterministic check independent of opponent_fn heading:
+    # attacker's swept head crosses the victim's body line (y=40): set it explicitly, then check.
     attacker._prev_head_uw = np.array([45.0, 41.0]); attacker.head_uw = np.array([45.0, 39.0])
     attacker.head = wrap(attacker.head_uw, w.size)
     assert w._check_death(attacker) is True and attacker.death_cause == "snake"
@@ -424,27 +463,27 @@ def test_mutual_head_to_head_both_die():
               path_uw=[np.array([43.0,40.0]), np.array([41.0,40.0])], target_length=CFG.start_length,
               stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0,40.0]), id=1)
     w.snakes.append(b)
-    dead = [s.id for s in w.snakes if w._check_death(s)]
-    assert set(dead) == {0, 1}                              # both heads overlap post-move
+    dead = [s.id for s in w.snakes if w._death_cause(s)]    # pure decider — matches step's phase-2 (C2)
+    assert set(dead) == {0, 1}                              # both heads overlap post-move; neither hides the other
 ```
 
 - [ ] **Step 2: Run to verify fail**
 
 Run: `... pytest tests/test_collision.py -q`
-Expected: FAIL (`_check_death` ignores other snakes).
+Expected: FAIL (`_death_cause` ignores other snakes).
 
-- [ ] **Step 3: Implement** — extend `_check_death(s)` (the converted `check_death`) after the self-body block, before `return False`:
+- [ ] **Step 3: Implement** — extend the **pure** `_death_cause(s)` (Task 2) to add the other-snake branch just before `return None`:
 
 ```python
         opts, orads = self._other_hazard(s)
-        if len(opts):
-            hit = segment_circle_hit(s._prev_head_uw, s.head_uw, opts, orads + hr, self.size)
-            if hit.any():
-                s.alive = False; s.death_cause = "snake"
-                return True
+        if len(opts) and segment_circle_hit(
+                s._prev_head_uw, s.head_uw, opts, orads + hr, self.size).any():
+            return "snake"
 ```
 
-(`hr = self.cfg.head_radius`, already bound at the top of `_check_death`.)
+(`hr = c.head_radius`, already bound at the top of `_death_cause`.) `_check_death` and `step`'s
+phase-2 both route through `_death_cause`, so this one branch enables cut-off AND order-independent
+head-to-head at once.
 
 - [ ] **Step 4: Run tests + full suite**
 
@@ -496,7 +535,7 @@ def test_multisnake_invariants_hold():
 Run: `... pytest tests/test_config.py -q`
 Expected: FAIL (`world_size_min` still 60 / new fields missing).
 
-- [ ] **Step 3: Implement** — bump `world_size_min/max` (`config.py:10-11`) to `110.0/160.0`; add the fields above; extend `assert_invariants`:
+- [ ] **Step 3: Implement** — bump `world_size_min/max` (`config.py:10-11`) to `110.0/160.0`; add the fields above; **append** these asserts to the end of `assert_invariants` (note: the existing list isn't a clean 1–6 — there's an unlabeled `length_cap < world/2` assert between (3) and (4) at `config.py:83`; just add the new ones, don't renumber the old):
 
 ```python
     # (7) two snakes can sit at mating distance without a forced cut-off
@@ -564,7 +603,7 @@ def test_dead_snake_becomes_corpse_and_is_edible():
 Run: `... pytest tests/test_multisnake.py::test_dead_snake_becomes_corpse_and_is_edible -v`
 Expected: FAIL (`corpses`/`_spawn_corpse` missing).
 
-- [ ] **Step 3: Implement** — init `self.corpses = {"pos": np.zeros((0,2)), "food": np.zeros((0,))}` in `__init__`; add `_spawn_corpse`; generalize `try_eat` (`world.py:246-260`) to also test corpses (nearest-image distance ≤ `eat_radius`), remove eaten corpses, add their energy/growth, and count them into `n`. In `step` phase 2, after marking deaths, call `self._spawn_corpse(s)` for each snake that just died. Keep chicken logic intact.
+- [ ] **Step 3: Implement** — init `self.corpses = {"pos": np.zeros((0,2)), "food": np.zeros((0,))}` in `__init__`; add `_spawn_corpse`; generalize `try_eat` (`world.py:246-260`) to also test corpses (nearest-image distance ≤ `eat_radius`), remove eaten corpses, add their energy/growth, and count them into `n`. **Remove the `if len(self.chicken_pos) == 0: return 0` early-return guard (`world.py:247-248`)** — else a chicken-less world (this test) returns 0 before ever checking corpses. Guard each block by its own array length instead. Wire the corpse into the phase-2 apply loop from Task 2: `for s, cause in dying: s.alive=False; s.death_cause=cause; self._spawn_corpse(s)`. Keep chicken logic intact.
 
 - [ ] **Step 4: Run tests + full suite**
 
@@ -750,7 +789,7 @@ def test_parent_cannot_eat_own_egg_but_rival_can():
 Run: `... pytest tests/test_reproduction.py -q`
 Expected: FAIL.
 
-- [ ] **Step 3: Implement** — add `_hatch_eggs`; extend `try_eat` to test the ego (the eater) vs eggs with an ownership mask (`self.snakes[0].id not in owner_row`). Call `self._hatch_eggs()` in `step` phase 3. (Ownership check uses the eater snake's `id`; `try_eat` is ego-centric in Milestone A — Milestone B generalizes eating per snake.)
+- [ ] **Step 3: Implement** — add `_hatch_eggs`; extend `try_eat` to test the ego (the eater) vs eggs with an ownership mask (`self.snakes[0].id not in owner_row`). Call `self._hatch_eggs()` in `step` phase 3. (The `chicken_pos == 0` early-return was already removed in Task 6, so eggs are reachable in a chicken-less world; guard the egg block by `len(self.eggs["pos"])`. Ownership check uses the eater snake's `id`; `try_eat` is ego-centric in Milestone A — Milestone B generalizes eating per snake.)
 
 - [ ] **Step 4: Run tests + full suite**
 
@@ -776,8 +815,10 @@ git commit -m "world: eggs hatch into snakes; ownership-aware egg eating"
 - Consumes: config `chickens_per_snake_max/min, chicken_ceiling, n_max` (Task 5).
 - Produces:
   - Starvation: in `step` phase 3, after energy decay, any live snake with `energy <= 0` dies
-    (`death_cause="starve"`) and spawns a corpse. (`decay_energy` still floors energy at 0; the
-    death check is separate so it applies to every snake, not just the ego.)
+    (`death_cause="starve"`) and spawns a corpse. The check loops over ALL live snakes, but in
+    Milestone A `decay_energy` only decays the **ego** (`self.energy` → `snakes[0]`), so in practice
+    only the ego can starve yet. **Per-snake energy/decay is deferred to Milestone B** (opponents
+    don't starve here) — the all-snakes loop is written now so B needs no change to this pass.
   - `maybe_spawn()` computes the target counts from the **live** snake count:
     `n_alive = sum(s.alive)`; `max_target = clamp(round(chickens_per_snake_max·n_alive), 1,
     chicken_ceiling)`, `min_target = clamp(round(chickens_per_snake_min·n_alive), 1, max_target)`;
