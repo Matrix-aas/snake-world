@@ -74,12 +74,37 @@ def rollout_once(model, norm_path, seed=0, max_steps=CFG.episode_horizon):
 
 
 def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
+    """Behavioral evaluation: hunting rate, deliberate-dash usage, stamina cycling, deaths by cause."""
     norm_path = _norm_path_for(model_path)
     _require_files(model_path, norm_path)
     model = PPO.load(model_path, device="cpu")
-    for ep in range(episodes):
-        out = rollout_once(model, norm_path, seed=(seed or 0) + ep)
-        print(f"episode {ep}: steps={out['steps']} eaten={out['eaten']} died={out['died']}")
+    vec = build_vec(1, seed or 0, training=False, norm_path=norm_path)
+    try:
+        obs = vec.reset()
+        eaten = act_dash = steps = 0
+        deaths = {"obstacle": 0, "self": 0}
+        stam, eplens, cur = [], [], 0
+        while len(eplens) < episodes:
+            a, _ = model.predict(obs, deterministic=False)
+            w = _world_of(vec); prev = w.stamina; stam.append(prev)
+            obs, _, done, infos = vec.step(a)
+            if not done[0]:
+                act_dash += int(_world_of(vec).stamina < prev)   # stamina dropped => actually dashed
+            eaten += infos[0].get("ate", 0); steps += 1; cur += 1
+            if done[0]:
+                dc = infos[0].get("death_cause")
+                if dc in deaths:
+                    deaths[dc] += 1
+                eplens.append(cur); cur = 0; obs = vec.reset()
+        s = np.array(stam)
+        print(f"over {steps} steps, {len(eplens)} episodes:")
+        print(f"  catch rate:  {eaten / steps * 1000:5.1f} chickens / 1000 steps")
+        print(f"  dash usage:  {act_dash / steps * 100:5.0f}% of steps (deliberate bursts, not constant)")
+        print(f"  stamina:     mean {s.mean():4.1f}/{CFG.s_max:.0f}   reserve builds: {(s > 10).mean() * 100:.0f}% of time above 10")
+        print(f"  episode len: {np.mean(eplens):5.0f} steps mean")
+        print(f"  deaths:      obstacle {deaths['obstacle']}, self {deaths['self']}")
+    finally:
+        vec.close()
 
 
 def _screen_fit_world_size(short=72.0):
