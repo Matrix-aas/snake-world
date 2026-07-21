@@ -244,15 +244,8 @@ class World:
         c = self.cfg
         if len(self.chicken_pos) == 0:
             return
-        to_head = torus_delta(self.head, self.chicken_pos, self.size)   # chicken->head
-        dist = np.linalg.norm(to_head, axis=1)
-        for i in range(len(self.chicken_pos)):
-            if dist[i] < c.r_flee and dist[i] > 1e-6:
-                base = np.arctan2(-to_head[i][1], -to_head[i][0])       # away from snake
-                speed = c.v_flee
-            else:
-                self.chicken_dir[i] += self.rng.normal(0, 0.3)          # slow wander drift
-                base = self.chicken_dir[i]; speed = c.v_wander
+
+        def steer(i, base, speed):
             old = self.chicken_pos[i]
             for da in (0.0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6):           # go straight, else steer around the rock
                 a = base + da
@@ -261,6 +254,46 @@ class World:
                     self.chicken_pos[i] = new
                     self.chicken_dir[i] = a                             # keep heading consistent for wander
                     break
+
+        live_heads = [s.head for s in self.snakes if s.alive]
+        if len(live_heads) <= 1:
+            # 0 or 1 live snake: EXACT legacy formula, untouched — required so a lone/ego snake
+            # (tests/test_chickens.py) flees byte-for-byte as before the multi-snake fix below.
+            # self.head is the ego proxy (unaffected by alive), matching pre-fix behavior.
+            to_head = torus_delta(self.head, self.chicken_pos, self.size)   # chicken->head
+            dist = np.linalg.norm(to_head, axis=1)
+            for i in range(len(self.chicken_pos)):
+                if dist[i] < c.r_flee and dist[i] > 1e-6:
+                    base = np.arctan2(-to_head[i][1], -to_head[i][0])       # away from snake
+                    speed = c.v_flee
+                else:
+                    self.chicken_dir[i] += self.rng.normal(0, 0.3)          # slow wander drift
+                    base = self.chicken_dir[i]; speed = c.v_wander
+                steer(i, base, speed)
+            return
+
+        # >=2 live snakes: flee the RESULTANT of every snake within r_flee, not just the nearest
+        # one — a chicken must never bolt from one snake straight into another.
+        heads = np.array(live_heads)                                        # (K,2)
+        for i in range(len(self.chicken_pos)):
+            to_heads = torus_delta(heads, self.chicken_pos[i], self.size)   # (K,2) chicken->each head
+            dist = np.linalg.norm(to_heads, axis=1)
+            near = (dist < c.r_flee) & (dist > 1e-6)
+            if near.any():
+                weight = c.r_flee - dist[near]                              # linear falloff, ->0 at r_flee
+                away = -to_heads[near] / dist[near, None]                   # unit vectors away from each near head
+                repulsion = (weight[:, None] * away).sum(axis=0)
+                rmag = np.linalg.norm(repulsion)
+                if rmag > 1e-6:
+                    base = np.arctan2(repulsion[1], repulsion[0])
+                else:                                                       # opposing snakes cancel out ->
+                    k = int(np.argmin(dist))                                # flee the single nearest instead
+                    base = np.arctan2(-to_heads[k][1], -to_heads[k][0])
+                speed = c.v_flee
+            else:
+                self.chicken_dir[i] += self.rng.normal(0, 0.3)              # slow wander drift
+                base = self.chicken_dir[i]; speed = c.v_wander
+            steer(i, base, speed)
 
     def _spawn_corpse(self, s):
         food = self.cfg.corpse_food_per_length * s.target_length

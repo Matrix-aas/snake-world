@@ -160,6 +160,80 @@ def test_hatched_owners_reported_and_cap_drops_pay_nothing():
     assert frozenset({2, 3}) not in owners2
 
 
+def _mk_snake(pos, sid):
+    from snake_rl.world import Snake, wrap
+    p = np.asarray(pos, float)
+    return Snake(head_uw=p.copy(), head=p.copy(), heading=0.0, path_uw=[p.copy()],
+                 target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
+                 _prev_head_uw=p.copy(), id=sid)
+
+
+def test_chicken_flees_nearest_live_snake_opponent_only():
+    # Bug: update_chickens only checked self.head (ego). A chicken near an OPPONENT but far
+    # from the ego must still flee — from the opponent, not wander in place.
+    from snake_rl.world import World, wrap
+    w = World(CFG, seed=20, size=(150.0, 150.0))
+    ego = w.snakes[0]
+    ego.head_uw = np.array([10.0, 10.0]); ego.head = wrap(ego.head_uw, w.size)   # far from the chicken
+    opp = _mk_snake([100.0, 100.0], sid=1)
+    w.snakes.append(opp)
+    w.set_chickens([[100.0 + CFG.r_flee * 0.5, 100.0]])          # within r_flee of the opponent only
+    before = np.linalg.norm(w.chicken_pos[0] - opp.head)
+    w.update_chickens()
+    after = np.linalg.norm(w.chicken_pos[0] - opp.head)
+    assert after > before                                          # fled the opponent, not just wandered
+
+
+def test_chicken_flees_lone_ego_snake_n1_invariant():
+    # N=1 invariance: a lone (ego) snake still makes chickens flee EXACTLY as before the fix
+    # (same direction, same speed) — the multi-snake repulsion path must never engage at N=1.
+    w = World(CFG, seed=1, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.set_chickens([[30.0 + CFG.r_flee * 0.5, 30.0]])
+    before = w.chicken_pos[0].copy()
+    w.update_chickens()
+    assert w.chicken_pos[0][0] > before[0]
+    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_flee) < 1e-6
+
+
+def test_chicken_flee_resultant_avoids_both_flanking_snakes():
+    # Two live snakes on different sides of a chicken, both within r_flee. Naive "flee the
+    # nearest" would run the chicken straight toward the farther one (verified numerically:
+    # snake A at bearing 0 deg/dist 6, snake B at bearing 100 deg/dist 7, r_flee=12 -> fleeing
+    # directly away from A alone moves the chicken CLOSER to B, 7.0 -> 6.89). The repulsion
+    # resultant of both "away" vectors, weighted by (r_flee - dist), must instead move the
+    # chicken away from BOTH.
+    w = World(CFG, seed=30, size=(150.0, 150.0))
+    chick = np.array([75.0, 75.0])
+    ego = w.snakes[0]; ego.head_uw = chick + [6.0, 0.0]; ego.head = ego.head_uw.copy()
+    theta = np.radians(100.0)
+    opp = _mk_snake(chick + 7.0 * np.array([np.cos(theta), np.sin(theta)]), sid=1)
+    w.snakes.append(opp)
+    w.set_chickens([chick])
+    d_ego_before = np.linalg.norm(chick - ego.head)
+    d_opp_before = np.linalg.norm(chick - opp.head)
+    w.update_chickens()
+    d_ego_after = np.linalg.norm(w.chicken_pos[0] - ego.head)
+    d_opp_after = np.linalg.norm(w.chicken_pos[0] - opp.head)
+    assert d_ego_after > d_ego_before                # moved away from A too...
+    assert d_opp_after > d_opp_before                # ...not toward B (what naive-nearest would do)
+
+
+def test_chicken_flee_degenerate_cancellation_falls_back_to_nearest():
+    # Two live snakes exactly opposite the chicken at equal distance: the weighted "away"
+    # vectors cancel to ~0. Must not NaN/stall — falls back to fleeing the single nearest snake.
+    w = World(CFG, seed=31, size=(150.0, 150.0))
+    chick = np.array([75.0, 75.0])
+    ego = w.snakes[0]; ego.head_uw = chick + [8.0, 0.0]; ego.head = ego.head_uw.copy()    # due east
+    opp = _mk_snake(chick + [-8.0, 0.0], sid=1)                                            # due west
+    w.snakes.append(opp)
+    w.set_chickens([chick])
+    w.update_chickens()
+    new_chick = w.chicken_pos[0]
+    assert np.isfinite(new_chick).all()
+    assert new_chick[0] < chick[0]                   # fled west, away from the (tie-break) nearest = ego (east)
+
+
 def test_deaths_detailed_reports_phase2_snake_cause():
     # Two snakes driven head-on into each other: cause "snake" for BOTH, surfaced per-id.
     from snake_rl.world import World, Snake, wrap
