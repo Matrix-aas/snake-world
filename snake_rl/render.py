@@ -1,5 +1,10 @@
 """pygame renderer: sprite-composited atmospheric world (tiled ground, obstacles, chickens,
-snakes) + procedural BLOOD/GORE effects. Supersampled AA, torus-aware, vignette.
+snakes) + procedural BLOOD/GORE effects + sprite-sheet ANIMATION. Supersampled AA, torus-aware.
+
+Animation: a wall-clock frame clock (`self._clock`, real seconds — decoupled from sim steps and
+render fps so cycles play smoothly at any speed) drives sprite-sheet frame selection; a per-entity
+PHASE offset (from stable id / position) keeps chickens and trees out of lockstep. The chicken
+plays peck / walk / run sheets by its FSM `chicken_state`; trees sway procedurally.
 
 Assets live in snake_rl/assets/ (generated). Every sprite path has a procedural fallback, so the
 game still runs (and the smoke tests still pass) if an asset is missing. Pitfall 11 is honored:
@@ -20,7 +25,10 @@ ASSET_FILES = {
     "ground": "ground.png",
     "rock": ["rock1.png", "rock2.png"],
     "tree": ["tree1.png", "tree2.png"],
-    "chicken": "chicken.png",
+    "chicken": "chicken.png",                                   # static fallback for the sheets below
+    "chicken_peck": ["chicken_peck_0.png", "chicken_peck_1.png", "chicken_peck_2.png", "chicken_peck_3.png"],
+    "chicken_walk": ["chicken_walk_0.png", "chicken_walk_1.png", "chicken_walk_2.png", "chicken_walk_3.png"],
+    "chicken_run": ["chicken_run_0.png", "chicken_run_1.png", "chicken_run_2.png", "chicken_run_3.png"],
     "corpse": "corpse.png",
     "blood": ["blood1.png", "blood2.png"],
     "egg": "egg.png",
@@ -46,6 +54,10 @@ RAY_NONE = (70, 92, 120); RAY_OBST = (226, 96, 84); RAY_CHICK = (240, 208, 96); 
 RAY_OTHER = (110, 200, 240); RAY_EGG = (240, 176, 224)          # B2 ray kinds 3=other_body, 4=egg
 RAY_CORPSE = (176, 132, 84)                                     # ray kind 5=corpse
 RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG, 5: RAY_CORPSE}
+
+# chicken FSM state (world.chicken_state) -> (sheet asset key, playback fps, frame count).
+# 0=PECK (slow head-bob), 1=WALK (waddle), 2=FLEE (fast flustered flap).
+CHICK_ANIM = {0: ("chicken_peck", 6.0, 4), 1: ("chicken_walk", 7.0, 4), 2: ("chicken_run", 13.0, 4)}
 
 # gore palettes (procedural particles)
 BLOOD = [(150, 12, 14), (176, 22, 20), (120, 8, 12), (198, 44, 36)]
@@ -83,7 +95,9 @@ class Renderer:
         self._scale = 1
         self._ss = SS
         self._world_key = None
-        self._t = 0                # frame counter for idle animation
+        self._t = 0                # render-frame counter (particle seeds, tongue flick)
+        self._clock = 0.0          # wall-clock animation time in seconds (set each draw)
+        self._clock_override = None  # test seam: force _clock to a fixed value for deterministic frames
         self._particles = []       # gore particles: [x,y,vx,vy,age,life,rad,color,gravity,grow]
         self._decals = []          # blood splatters on the ground: [x,y,variant,angle,diam,age,life]
         self._transient = []       # short sprite effects: [kind, x, y, age, life]
@@ -91,8 +105,8 @@ class Renderer:
         self.font = pygame.font.SysFont("menlo,consolas,monospace", 15)
         self._sprite_cache = {}
         self._assets = {}
+        self._chick_scale = {}     # per-chicken-sheet body-size normalization (see _load_assets)
         self._ground_surf = None
-        self._vignette = None
 
     # --- setup / assets ---
     def _load_assets(self):
@@ -117,6 +131,31 @@ class Renderer:
                 s = load(val)
                 if s is not None:
                     self._assets[key] = s
+        self._calibrate_chicken_scale()
+
+    @staticmethod
+    def _alpha_maxdim(surf):
+        """Largest bbox dimension (px) of a sprite's opaque pixels — a size proxy for the subject."""
+        a = pygame.surfarray.array_alpha(surf)
+        xs, ys = np.where(a > 24)
+        if not len(xs):
+            return surf.get_width()
+        return max(int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+
+    def _calibrate_chicken_scale(self):
+        """Equalize on-screen BODY size across the chicken anim sheets. slice_sheet scales each
+        sheet to its WIDEST frame, so the wings-spread RUN frames leave the run BODY small in its
+        canvas -> it'd render smaller than the peck/walk hen at the same diameter. Rescale each
+        sheet's draw diameter by (max body proxy / this sheet's body proxy). Body proxy = the sheet's
+        MOST COMPACT frame (wings tucked ~= body only), so run scales up to match (its wings stay
+        proportionally bigger, which suits a panicked flee). Self-calibrating: survives regeneration."""
+        refs = {}
+        for key in ("chicken_peck", "chicken_walk", "chicken_run"):
+            frames = self._assets.get(key)
+            if frames:
+                refs[key] = min(self._alpha_maxdim(f) for f in frames)
+        target = max(refs.values()) if refs else 1
+        self._chick_scale = {k: target / v for k, v in refs.items()}
 
     def _ensure(self, world):
         key = (round(float(world.size[0]), 3), round(float(world.size[1]), 3))
@@ -141,7 +180,6 @@ class Renderer:
         self._sprite_cache = {}                       # fresh sprites for the new surface format (Pitfall 11)
         self._load_assets()
         self._ground_surf = self._build_ground()
-        self._vignette = self._make_vignette(dw, dh)
         self._motes = self._make_motes(world)
 
     def _p(self, xy):
@@ -213,17 +251,10 @@ class Renderer:
             self._sprite_cache[key] = s
         return s
 
-    def _make_vignette(self, w, h):
-        """True edge-darkening vignette: clear center, black corners (smooth radial alpha)."""
-        surf = pygame.Surface((w, h), pygame.SRCALPHA)
-        cx, cy = w / 2, h / 2
-        maxd = np.hypot(cx, cy)
-        d = np.hypot(np.arange(w)[:, None] - cx, np.arange(h)[None, :] - cy) / maxd
-        a = np.clip((np.maximum(0.0, d - 0.35) / 0.65) ** 2.2 * 210, 0, 185).astype(np.uint8)
-        av = pygame.surfarray.pixels_alpha(surf)
-        av[:] = a
-        del av
-        return surf.convert_alpha()
+    def _anim_frame(self, nframes, fps, phase=0.0):
+        """Which sheet frame to show now: wall-clock time * fps, +phase (a per-entity offset so
+        entities don't animate in lockstep), wrapped to [0, nframes). Smooth at any sim speed."""
+        return int(self._clock * fps + phase) % nframes
 
     def _make_motes(self, world):
         rng = np.random.default_rng(12345)
@@ -261,7 +292,12 @@ class Renderer:
             if kind == 1:                                            # tree
                 s = self._sprite("tree", 2.7 * r * self._scale, angle=ang, variant=var)
                 if s is not None:
-                    self._blit_world(s, pos)
+                    # gentle wind sway: crown drifts in a small ellipse, phase from position so
+                    # trees don't sway in sync (top-down, so the crown translates rather than tilts).
+                    ph = pos[0] * 0.7 + pos[1] * 1.3
+                    sway = (0.10 * r * self._scale * np.sin(self._clock * 0.9 + ph),
+                            0.05 * r * self._scale * np.sin(self._clock * 1.3 + ph * 1.7))
+                    self._blit_world(s, pos, off=sway)
                     continue
                 self._circle(TRUNK, pos, max(2, rp // 3))
                 self._circle(LEAF, pos, rp)
@@ -311,7 +347,7 @@ class Renderer:
         if not len(e["pos"]):
             return
         c = world.cfg
-        pulse = 0.9 + 0.1 * np.sin(self._t * 0.16)
+        pulse = 0.94 + 0.06 * np.sin(self._clock * 2.2)              # gentle clock-driven breathing
         for pos, timer in zip(e["pos"], e["timer"]):
             p = wrap(pos, world.size)
             r = c.egg_radius * pulse
@@ -321,7 +357,13 @@ class Renderer:
             s = self._sprite("egg_cracked" if about_to_hatch else "egg", 2.6 * r * self._scale,
                              angle=(int(p[0] * 5 + p[1] * 9) % 360))
             if s is not None:
-                self._blit_world(s, p)
+                # rattle: still normally, shivering harder the closer it is to hatching (anticipation)
+                ph = p[0] * 1.7 + p[1] * 0.9
+                rattle = 1.0 + 3.0 * max(0.0, 1.0 - timer / 30.0)
+                wob = 0.06 * c.egg_radius * self._scale * rattle
+                off = (wob * np.sin(self._clock * 9.0 * rattle + ph),
+                       0.4 * wob * np.sin(self._clock * 7.0 + ph))
+                self._blit_world(s, p, off=off)
                 continue
             self._circle(EGG_SHELL, p, rp)
             self._circle(EGG_SHADE, p + np.array([-r * 0.28, -r * 0.28]), max(1, int(rp * 0.45)))
@@ -329,14 +371,26 @@ class Renderer:
     def _draw_chickens(self, world, positions, dirs):
         cr = world.cfg.chicken_radius
         rp = max(4, int(cr * self._scale))
-        for cpos, cdir in zip(positions, dirs):
+        diam = 3.4 * cr * self._scale
+        # positions/dirs arrive in world-chicken order (both watch.py's interp path and the default
+        # path), so chicken_state[i]/chicken_id[i] line up by index -> pick the anim + a stable phase.
+        states, ids = world.chicken_state, world.chicken_id
+        for i, (cpos, cdir) in enumerate(zip(positions, dirs)):
             p = wrap(cpos, world.size)
             self._shadow(p, rp)
-            bob = 0.06 * cr * np.sin(self._t * 0.4 + p[0])           # gentle idle bob
-            s = self._sprite("chicken", 3.4 * cr * self._scale, angle=float(np.degrees(cdir)))
+            st = int(states[i]) if i < len(states) else 1
+            phase = (int(ids[i]) * 1.7) if i < len(ids) else 0.0     # per-chicken offset (out of lockstep)
+            key, fps, nf = CHICK_ANIM[st]
+            s = self._sprite(key, diam * self._chick_scale.get(key, 1.0), angle=float(np.degrees(cdir)),
+                             variant=self._anim_frame(nf, fps, phase))
+            if s is None:                                            # sheet missing -> static hen sprite
+                s = self._sprite("chicken", diam, angle=float(np.degrees(cdir)))
             if s is not None:
-                self._blit_world(s, p, off=(0, int(bob * self._scale)))
+                self._blit_world(s, p)
                 continue
+            # last-resort procedural hen (no sprites at all): a state-aware bob so it still animates.
+            bob = 0.12 * cr * np.sin(self._clock * fps + phase) * (0.5 if st == 0 else 1.0)
+            p = p + np.array([0.0, bob])
             for dx in (-0.3, 0.0, 0.3):
                 pygame.draw.circle(self.canvas, COMB, self._p(p + np.array([dx * cr, -cr * 0.7])),
                                    max(2, int(cr * 0.24 * self._scale)))
@@ -504,10 +558,10 @@ class Renderer:
         m = self._motes
         m[:, 0] = (m[:, 0] + m[:, 2]) % world.size[0]
         m[:, 1] = (m[:, 1] + m[:, 3]) % world.size[1]
-        drift = 0.35 * np.sin(self._t * 0.05)
-        for x, y, _vx, _vy in m:
-            self._blit_world(self._dot(max(1, int(0.18 * self._scale)), (232, 240, 210), 40 + int(drift * 8)),
-                             (x, y))
+        rpx = max(1, int(0.18 * self._scale))
+        for idx, (x, y, _vx, _vy) in enumerate(m):
+            tw = 0.5 + 0.5 * np.sin(self._clock * 1.5 + idx * 2.399)   # per-mote firefly twinkle
+            self._blit_world(self._dot(rpx, (236, 244, 206), 22 + int(tw * 48)), (x, y))
 
     def _draw_sensors(self, world, head_uw, heading, snake=None):
         head = wrap(head_uw, world.size)
@@ -524,10 +578,12 @@ class Renderer:
 
     def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None):
         """Composite the scene in depth order: ground -> obstacles -> blood decals -> corpses ->
-        eggs -> chickens -> snakes -> gore particles -> ambient -> HUD/sensors -> vignette.
+        eggs -> chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
         `bodies`: optional {snake_id: interpolated unwrapped body polyline}. `follow_id`: which
         snake gets the larger ring HUD + sensor overlay (defaults to slot-0)."""
         self._t += 1
+        self._clock = self._clock_override if self._clock_override is not None \
+            else pygame.time.get_ticks() / 1000.0     # wall-clock anim time (smooth, sim-independent)
         self._ensure(world)
         if chick_pos is None:
             chick_pos, chick_dir = world.chicken_pos, world.chicken_dir
@@ -564,7 +620,6 @@ class Renderer:
             self.display.blit(self.canvas, (0, 0))
         else:
             self.display.blit(pygame.transform.smoothscale(self.canvas, (self.dw, self.dh)), (0, 0))
-        self.display.blit(self._vignette, (0, 0))
         pygame.display.flip()
 
     def toggle_sensors(self):
