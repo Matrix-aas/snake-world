@@ -7,3 +7,5 @@ models/
 runs/
 .DS_Store
 *.pkl
+models_good_backup/
+models_backup/

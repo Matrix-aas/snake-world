@@ -63,7 +63,7 @@ reserve to fire and the reserve refills slowly, so the snake must *earn* a dash 
 and then spend it in a burst — a stalk-and-pounce rhythm emerges. But a fresh snake has to
 learn *to hunt* before it can learn *thrift*: dropping the hard reserve on it from step 0
 traps it in "never dash, just survive" (it can't catch faster-fleeing chickens). So a single
-training run **anneals** the stamina difficulty — easy free dash for the first ~35% (learn to
+training run **anneals** the stamina difficulty — easy free dash for the first ~42% (learn to
 hunt), then linearly ramps the real reserve mechanic in. No manual phases; just:
 
 ```bash
@@ -80,14 +80,17 @@ compare). Stop training any time and watch how far the snake has come.
 
 ## What to expect
 
-Learning is fast on an M1 (CPU, ~4–5k steps/s with 8 envs):
+Fast on an M1 (CPU, ~6–8k steps/s with 16 envs; the raycast is vectorized). A full
+`6M`-step run (~15–20 min) produces a snake that, measured over ~12k steps
+(`./snake watch --headless --episodes 20`):
 
-- **~0–300k steps:** learns not to die — episode length climbs from ~3 to ~200 steps
-  as it dodges obstacles and its own body.
-- **~300k–1M steps:** starts hunting — `ep_rew_mean` crosses from −10 into positive
-  territory (~+20) as it follows smell/sight to chickens and dashes down the runners.
-- **~3M steps (~15 min):** `ep_rew_mean` ≈ +50, ~4–5 chickens per episode, best runs
-  700–900 steps. It explores, tracks scent around rocks, and saves stamina for the chase.
+- **hunts hard** — ~13 chickens / 1000 steps, `ep_rew_mean` ≈ **+77**, stays well-fed;
+- **dashes deliberately** — a sprint only ~25% of the time, in bursts to run a chicken
+  down; its stamina reserve visibly builds while walking and drains in the pounce
+  (the `dash` bar spends most of its time cycling, not pinned at zero);
+- **rarely clips** — it perceives its own body width (vision is inflated by the head
+  radius), so it keeps clearance and dies to a rock only ~once every ~600 steps;
+- **never eats its own tail** — frame-stacked memory tracks where the body went.
 
 Random worlds every episode mean it generalizes rather than memorizing a map. Tune any
 constant in `snake_rl/config.py` (the invariants there fail fast if a change breaks the
@@ -95,8 +98,10 @@ constant in `snake_rl/config.py` (the invariants there fail fast if a change bre
 
 ## How it works
 
-- **Senses (≈34 floats, egocentric):** 9 vision rays `[distance, is-obstacle, is-chicken, is-self]`;
-  smell `[intensity, gradient-forward, gradient-left]`; proprioception `[energy, length, stamina]`.
+- **Senses (≈34 floats, egocentric):** 9 vision rays `[distance, is-obstacle, is-chicken, is-self]`
+  — inflated by the head radius so each ray reports *distance until the head edge would touch*, giving
+  the snake awareness of its own width; smell `[intensity, gradient-forward, gradient-left]`;
+  proprioception `[energy, length, stamina]`.
   Temporal memory via frame-stacking (the snake has no rear vision, so it must *remember* where its body went).
 - **Actions:** `MultiDiscrete([3, 2])` — steer `{left, straight, right}` × dash `{no, yes}`.
 - **Reward:** `+10` per chicken, potential-based shaping toward the nearest scent
