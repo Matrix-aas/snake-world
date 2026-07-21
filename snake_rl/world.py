@@ -337,10 +337,13 @@ class World:
 
     def maybe_spawn(self):
         c = self.cfg
+        n_alive = max(1, sum(1 for s in self.snakes if s.alive))
+        max_target = int(np.clip(round(c.chickens_per_snake_max * n_alive), 1, c.chicken_ceiling))
+        min_target = int(np.clip(round(c.chickens_per_snake_min * n_alive), 1, max_target))
         n = len(self.chicken_pos)
-        if n >= c.max_chickens:
+        if n >= max_target:
             return
-        p = 0.06 if n < c.min_chickens else 1.0 / c.spawn_period        # fast refill to min, then random up to max
+        p = 0.06 if n < min_target else 1.0 / c.spawn_period   # fast refill to min, then random to max
         if n == 0 or self.rng.random() < p:
             self._add_chicken(self._free_point(c.chicken_radius))
 
@@ -480,6 +483,10 @@ class World:
         self.update_chickens()
         ate = self.try_eat()
         self.decay_energy()
+        for s in self.snakes:
+            if s.alive and s.energy <= 0:
+                s.alive = False; s.death_cause = "starve"
+                self._spawn_corpse(s)
         self.maybe_spawn()
         self._resolve_mating()
         self._hatch_eggs()

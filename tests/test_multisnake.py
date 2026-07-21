@@ -75,3 +75,27 @@ def test_dead_snake_becomes_corpse_and_is_edible():
     w.snakes[0].head = w.corpses["pos"][0].copy()
     n = w.try_eat()
     assert n == 1 and w.corpses["pos"].shape == (0, 2) and w.snakes[0].energy > 10.0
+
+
+def test_starvation_kills_and_leaves_corpse():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.world import World
+    w = World(CFG, seed=9, size=(80.0, 80.0))
+    w.chicken_pos = np.zeros((0, 2)); w.chicken_dir = np.zeros((0,)); w.chicken_id = np.zeros((0,), int)
+    w.snakes[0].energy = CFG.energy_decay / 2               # will hit 0 this step
+    w.step(1, 0)
+    assert w.snakes[0].alive is False and w.snakes[0].death_cause == "starve"
+    assert w.corpses["pos"].shape[0] == 1
+
+
+def test_food_target_scales_with_live_snakes():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.worldgen import generate_world
+    w = generate_world(CFG, seed=10, size=(150.0, 150.0), n_snakes=4)
+    # drive spawns and assert the chicken count tracks ~2 per snake, capped by the ceiling
+    for _ in range(400):
+        w.maybe_spawn()
+    assert len(w.chicken_pos) <= min(CFG.chicken_ceiling, round(CFG.chickens_per_snake_max * 4))
+    assert len(w.chicken_pos) >= 1

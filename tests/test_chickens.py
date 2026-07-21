@@ -32,19 +32,27 @@ def test_chicken_flees_away_when_snake_close():
 
 
 def test_spawn_respects_max():
+    # Task 9: target is population-scaled, not the static CFG.max_chickens.
     w = World(CFG, seed=2, size=(60, 60))
-    w.set_chickens(np.zeros((CFG.max_chickens, 2)))
+    n_alive = max(1, sum(1 for s in w.snakes if s.alive))
+    max_target = round(np.clip(CFG.chickens_per_snake_max * n_alive, 1, CFG.chicken_ceiling))
+    w.set_chickens(np.zeros((max_target, 2)))
     for _ in range(1000):
         w.maybe_spawn()
-    assert len(w.chicken_pos) == CFG.max_chickens
+    assert len(w.chicken_pos) == max_target
 
 
 def test_spawn_refills_to_minimum():
+    # Task 9: targets are population-scaled (chickens_per_snake_max/min * live snakes,
+    # clamped to chicken_ceiling), not the static CFG.min_chickens/max_chickens.
     w = World(CFG, seed=3, size=(80, 80))
+    n_alive = max(1, sum(1 for s in w.snakes if s.alive))
+    max_target = round(np.clip(CFG.chickens_per_snake_max * n_alive, 1, CFG.chicken_ceiling))
+    min_target = round(np.clip(CFG.chickens_per_snake_min * n_alive, 1, max_target))
     w.set_chickens(np.zeros((0, 2)))                  # empty world
     for _ in range(300):
         w.maybe_spawn()
-    assert CFG.min_chickens <= len(w.chicken_pos) <= CFG.max_chickens
+    assert min_target <= len(w.chicken_pos) <= max_target
 
 
 def test_ids_stable_across_eat():
