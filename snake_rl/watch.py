@@ -84,10 +84,10 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
         eaten = act_dash = steps = 0
         deaths = {"obstacle": 0, "self": 0}
         stam, eplens, cur = [], [], 0
-        while len(eplens) < episodes:
-            a, _ = model.predict(obs, deterministic=False)
+        while len(eplens) < max(1, episodes):
+            a, _ = model.predict(obs, deterministic=False)   # stochastic, matching watch's default look
             w = _world_of(vec); prev = w.stamina; stam.append(prev)
-            obs, _, done, infos = vec.step(a)
+            obs, _, done, infos = vec.step(a)                # on done, SB3 autoresets and returns the new obs
             if not done[0]:
                 act_dash += int(_world_of(vec).stamina < prev)   # stamina dropped => actually dashed
             eaten += infos[0].get("ate", 0); steps += 1; cur += 1
@@ -95,7 +95,8 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5):
                 dc = infos[0].get("death_cause")
                 if dc in deaths:
                     deaths[dc] += 1
-                eplens.append(cur); cur = 0; obs = vec.reset()
+                eplens.append(cur); cur = 0                  # keep the autoreset obs (no second reset)
+        steps = max(1, steps)
         s = np.array(stam)
         print(f"over {steps} steps, {len(eplens)} episodes:")
         print(f"  catch rate:  {eaten / steps * 1000:5.1f} chickens / 1000 steps")
