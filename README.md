@@ -43,7 +43,7 @@ purple = own body).
 ## Train (headless, fast — loads the M1 fully)
 
 ```bash
-./snake train --steps 2000000 --envs 16    # set --envs to your performance-core count
+./snake train --steps 6000000 --envs 16    # set --envs to your performance-core count
 # resume from the last checkpoint: same command
 # start over from scratch:          add --reset
 ```
@@ -56,17 +56,22 @@ prints running stats (chickens eaten, deaths) and saves `models/snake.zip` +
 `models/vecnormalize.pkl` periodically, so you can stop any time (Ctrl-C) and
 `./snake watch` the current checkpoint.
 
-### Recommended curriculum (best results)
+### How the "deliberate dash" is learned (automatic curriculum)
 
-Dashing costs a reward penalty (`dash_penalty`) so the snake sprints only to chase, not
-constantly. But a fresh snake must learn *to hunt* before it can learn *thrift* — a penalty
-from step 0 traps it in "never dash, just survive" (it can't catch faster-fleeing chickens).
-So train in two phases:
+The dash is rationed **mechanically, not by a reward penalty**: it needs a full stamina
+reserve to fire and the reserve refills slowly, so the snake must *earn* a dash by walking
+and then spend it in a burst — a stalk-and-pounce rhythm emerges. But a fresh snake has to
+learn *to hunt* before it can learn *thrift*: dropping the hard reserve on it from step 0
+traps it in "never dash, just survive" (it can't catch faster-fleeing chickens). So a single
+training run **anneals** the stamina difficulty — easy free dash for the first ~35% (learn to
+hunt), then linearly ramps the real reserve mechanic in. No manual phases; just:
 
 ```bash
-./snake train --steps 1600000 --envs 16 --reset --easy-stamina   # phase 1: learn to hunt (cheap dash)
-./snake train --steps 1800000 --envs 16                          # phase 2: resume, real stamina reserve
+./snake train --steps 6000000 --envs 16 --reset
 ```
+
+(This mirrors reward-shaping best practice: warm up on the easy task, then anneal in the
+constraint — an abrupt switch collapses the learned behavior.)
 
 The viewer runs the current checkpoint in a fresh random world and draws the vision
 rays and a smell readout. Play is stochastic by default (looks more alive and, on a
