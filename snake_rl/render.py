@@ -34,6 +34,7 @@ class Renderer:
         self._scale = 1
         self._ss = SS
         self._world_key = None
+        self._t = 0                # frame counter for idle animation (periodic tongue flicks)
         self.font = pygame.font.SysFont("menlo,consolas,monospace", 15)
         self._sprite_cache = {}
         self._vignette = None
@@ -152,8 +153,10 @@ class Renderer:
         d = body_uw[0] - body_uw[1] if n > 1 else world.heading_vec()
         nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else world.heading_vec()
         perp = np.array([-d[1], d[0]])
-        if world.dashed:                                   # forked tongue on a dash
-            tip = head + d * hr * 1.35; base = head + d * hr * 0.9
+        flick = world.dashed or (self._t % 48 < 6)         # tongue out on a dash, and a periodic idle flick
+        if flick:                                          # forked tongue tasting the air
+            reach = 1.35 if world.dashed else 1.15
+            tip = head + d * hr * reach; base = head + d * hr * 0.9
             pygame.draw.line(self.canvas, TONGUE, self._p(base), self._p(tip), max(2, int(0.14 * self._scale)))
             for s in (1, -1):
                 pygame.draw.line(self.canvas, TONGUE, self._p(tip), self._p(tip + (d * 0.45 + perp * 0.45 * s) * hr), max(2, int(0.12 * self._scale)))
@@ -191,6 +194,7 @@ class Renderer:
         self._bar(18, 62, 150, 12, world.energy / c.energy_max, (240, 190, 90), "food")  # hunger
 
     def draw(self, world, body_uw=None, chick_pos=None, chick_dir=None):
+        self._t += 1
         self._ensure(world)
         if body_uw is None:
             body_uw = world.body_render_path_uw()
