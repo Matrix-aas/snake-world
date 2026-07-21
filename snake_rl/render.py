@@ -18,6 +18,9 @@ TONGUE = (236, 74, 96)
 EGG_SHELL = (236, 224, 196); EGG_SHADE = (206, 188, 150); EGG_TEXT = (30, 26, 20)
 CORPSE = (92, 74, 58)
 RING_TRACK = (44, 48, 58)
+# ring HUD: each ring's color encodes WHICH stat (not the snake's identity color, or all 3 rings
+# look the same) -- outer energy=green, middle stamina=cyan, inner length=amber.
+RING_COLORS = ((96, 214, 120), (86, 200, 232), (240, 186, 72))
 RAY_NONE = (70, 92, 120); RAY_OBST = (226, 96, 84); RAY_CHICK = (240, 208, 96); RAY_SELF = (168, 128, 224)
 RAY_OTHER = (110, 200, 240); RAY_EGG = (240, 176, 224)          # B2 ray kinds 3=other_body, 4=egg
 RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG}
@@ -202,18 +205,24 @@ class Renderer:
             pygame.draw.circle(self.canvas, SNAKE_EYE, self._p(e), max(2, int(hr * 0.3 * self._scale)))
             pygame.draw.circle(self.canvas, PUPIL, self._p(e + d * hr * 0.13), max(1, int(hr * 0.15 * self._scale)))
 
-    def _ring_hud(self, world, snake, big=False):
-        """Per-snake 3-ring concentric badge floating above the head: outer=energy, middle=stamina,
-        inner=length->length_cap, each a filling arc tinted the snake's color. The followed/ego
-        snake gets a larger version -- replaces the old single-snake bar HUD (doesn't scale to 6)."""
+    def _ring_hud(self, world, snake, head_pos, big=False):
+        """Per-snake 3-ring concentric badge floating above the head: outer=energy(green),
+        middle=stamina(cyan), inner=length->length_cap(amber) -- each ring's OWN fixed color
+        encodes which stat it is (not the snake's identity color, or all 3 rings look the same);
+        a thin outline in the snake's hue groups the badge to its owner. The followed/ego snake
+        gets a larger version -- replaces the old single-snake bar HUD (doesn't scale to 6).
+        `head_pos` is the (possibly interpolated) wrapped head position the body was just drawn
+        at -- using it here, not `snake.head` (the raw un-interpolated stepped position), is what
+        keeps the badge glued to the head instead of jittering a step behind it."""
         c = world.cfg
-        color = color_for(snake.color_seed)
         hr = c.head_radius
         r_out = hr * (2.4 if big else 1.6)
         step = r_out * 0.3
-        center = wrap(snake.head, world.size) + np.array([0.0, -(r_out + hr * 1.3)])
+        center = head_pos + np.array([0.0, -(r_out + hr * 1.3)])
         p = self._p(center)
         lw = max(2, int((0.22 if big else 0.15) * self._scale))
+        outline_r = max(3, int((r_out + step * 0.6) * self._scale))
+        pygame.draw.circle(self.canvas, color_for(snake.color_seed), p, outline_r, 1)
         fracs = (np.clip(snake.energy / c.energy_max, 0.0, 1.0),
                  np.clip(snake.stamina / c.s_max, 0.0, 1.0),
                  np.clip(snake.target_length / c.length_cap, 0.0, 1.0))
@@ -224,7 +233,7 @@ class Renderer:
                 start = -np.pi / 2
                 end = start + float(frac) * 2 * np.pi
                 rect = pygame.Rect(p[0] - r_px, p[1] - r_px, 2 * r_px, 2 * r_px)
-                pygame.draw.arc(self.canvas, color, rect, start, end, lw)
+                pygame.draw.arc(self.canvas, RING_COLORS[i], rect, start, end, lw)
 
     def _draw_eggs(self, world):
         e = world.eggs
@@ -297,7 +306,7 @@ class Renderer:
             if b is None:
                 b = world._body_render_path_uw(s)
             self._draw_snake(world, s, b, big=big)
-            self._ring_hud(world, s, big=big)
+            self._ring_hud(world, s, wrap(b[0], world.size), big=big)
             if big:
                 sensor_snake = (s, b)
         if self.show_sensors and sensor_snake is not None:

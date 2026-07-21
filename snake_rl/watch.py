@@ -185,11 +185,13 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5, max_steps
         "kills": deaths["snake"],
         "starvations": deaths["starve"],
         "deaths": deaths,
-        "catch_rate": catches / steps * 1000,
+        # per-snake, not population-summed -- matches CLAUDE.md's judging band (10-14/1000) and
+        # dash_usage's own normalization; a population-summed rate would scale with snake count.
+        "catch_rate": catches / snake_steps * 1000,
         "dash_usage": dash_steps / snake_steps * 100,
     }
     print(f"over {steps} steps, persistent {episodes}-episode-equivalent ecosystem run:")
-    print(f"  catch rate:  {metrics['catch_rate']:5.1f} items / 1000 steps (whole population)")
+    print(f"  catch rate:  {metrics['catch_rate']:5.1f} items / 1000 snake-steps (per snake)")
     print(f"  dash usage:  {metrics['dash_usage']:5.0f}% of live snake-steps")
     print(f"  population:  mean {np.mean(population):4.1f}   min {min(population)}   max {max(population)}")
     print(f"  births:      {births}    kills: {metrics['kills']}    starvations: {metrics['starvations']}")

@@ -41,16 +41,22 @@ def test_render_draws_multisnake_world_with_eggs_and_corpses():
 
 
 def test_render_sensors_handle_other_body_and_egg_ray_kinds():
-    # Force a ray to hit another snake's body (kind 3) and an egg (kind 4) sits nearby (kind 4) --
-    # this is the exact scenario that KeyErrors if RAY_KIND isn't extended for B2's new kinds.
+    # Force a ray to hit another snake's body (kind 3) and a DIFFERENT ray to hit an egg (kind 4)
+    # -- this is the exact scenario that KeyErrors if RAY_KIND isn't extended for B2's new kinds.
+    # The egg sits off to the side (perp), not in front (fwd), so it doesn't occlude the other
+    # snake's head on the shared forward ray -- both kinds must actually appear, not just not-crash.
+    from snake_rl.sensors import vision_distances
     w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
     ego = w.snakes[0]
     fwd = ego.heading_vec()
+    perp = np.array([-fwd[1], fwd[0]])
     w.snakes[1].head_uw = ego.head_uw + fwd * 5.0
     w.snakes[1].head = wrap(w.snakes[1].head_uw, w.size)
     w.snakes[1].path_uw = [w.snakes[1].head_uw.copy()]
-    w.eggs = {"pos": ((ego.head_uw + fwd * 3.0) % w.size)[None].copy(),
+    w.eggs = {"pos": ((ego.head_uw + perp * 3.0) % w.size)[None].copy(),
               "timer": np.array([10.0]), "owner": np.array([[5, 6]])}
+    _, _, kinds = vision_distances(w, ego.head, ego.heading)
+    assert 3 in kinds and 4 in kinds        # the scene actually produces both kinds, as claimed
     r = Renderer(scale=4, show_sensors=True)
-    r.draw(w)
+    r.draw(w)      # must not KeyError
     r.close()
