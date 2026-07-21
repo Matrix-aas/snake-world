@@ -29,20 +29,26 @@ def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None, dash
 
 
 class EpisodeStatsCallback(BaseCallback):
-    """Log chickens eaten and deaths PER WINDOW (delta, not lifetime total)."""
+    """Log chickens eaten, deaths, and reproduction events PER WINDOW (delta, not lifetime total)."""
     def __init__(self, every=10000):
-        super().__init__(); self.every = every; self.eaten = 0; self.deaths = 0; self._last = 0
+        super().__init__(); self.every = every
+        self.eaten = 0; self.deaths = 0; self.repro = 0; self.hatched = 0; self._last = 0
 
     def _on_step(self):
         for info in self.locals["infos"]:
             self.eaten += info.get("ate", 0)
+            self.repro += info.get("repro_ego", 0)      # ego-owned eggs that hatched -> +reward_repro fired
+            self.hatched += info.get("hatched", 0)      # all hatchlings born (any owner)
             if info.get("alive") is False:
                 self.deaths += 1
         if self.num_timesteps - self._last >= self.every:
             self.logger.record("snake/eaten_per_window", self.eaten)
             self.logger.record("snake/deaths_per_window", self.deaths)
-            print(f"[{self.num_timesteps}] eaten+={self.eaten} deaths+={self.deaths}")
-            self.eaten = self.deaths = 0
+            self.logger.record("snake/repro_per_window", self.repro)
+            self.logger.record("snake/hatched_per_window", self.hatched)
+            print(f"[{self.num_timesteps}] eaten+={self.eaten} deaths+={self.deaths} "
+                  f"repro+={self.repro} hatched+={self.hatched}")
+            self.eaten = self.deaths = self.repro = self.hatched = 0
             self._last = self.num_timesteps
         return True
 

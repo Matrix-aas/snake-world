@@ -128,7 +128,8 @@ class SnakeEnv(gym.Env):
         reward = c.reward_eat * out["ate"]
         # [I-2] pay reproduction ONLY for eggs that actually hatched AND that the ego co-owns; a raided
         # or population-cap-dropped ego egg is absent from hatched_owners, so it pays nothing.
-        reward += c.reward_repro * sum(1 for owners in out["hatched_owners"] if ego_id in owners)
+        n_repro_ego = sum(1 for owners in out["hatched_owners"] if ego_id in owners)
+        reward += c.reward_repro * n_repro_ego
         for sid, _cause in out["deaths_detailed"]:
             self._opp.reset_snake(sid)         # clear a dead snake's frame ring (no stale frames)
         if terminated:
@@ -142,5 +143,6 @@ class SnakeEnv(gym.Env):
         if out["dashed"]:                         # dashing burns energy -> use it only to chase, not constantly
             reward -= self._dash_penalty
         info = {"ate": out["ate"], "alive": self.world.alive, "steps": self.world.steps,
-                "death_cause": self.world.death_cause}
+                "death_cause": self.world.death_cause,
+                "repro_ego": n_repro_ego, "hatched": len(out["hatched_owners"])}
         return observe(self.world), float(reward), terminated, truncated, info
