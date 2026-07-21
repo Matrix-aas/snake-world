@@ -21,3 +21,27 @@ def test_no_obstacle_on_snake_start():
     w = generate_world(CFG, seed=3)
     d = torus_dist(w.obstacle_pos, w.head, w.size)
     assert (d > w.obstacle_r + CFG.head_radius).all()
+
+
+def test_generate_world_multi_snake_spread():
+    from snake_rl.worldgen import generate_world
+    from snake_rl.world import torus_dist
+    import numpy as np
+    w = generate_world(__import__("snake_rl.config", fromlist=["CFG"]).CFG,
+                       seed=7, size=(140.0, 140.0), n_snakes=4)
+    assert len(w.snakes) == 4
+    assert [s.id for s in w.snakes] == [0, 1, 2, 3]
+    heads = np.array([s.head for s in w.snakes])
+    # no two snakes spawn on top of each other
+    for i in range(4):
+        for j in range(i + 1, 4):
+            assert torus_dist(heads[i][None], heads[j], w.size)[0] > 2.0
+
+
+def test_generate_world_default_is_single_and_centered():
+    from snake_rl.worldgen import generate_world
+    from snake_rl.config import CFG
+    import numpy as np
+    w = generate_world(CFG, seed=7, size=(80.0, 80.0))       # n_snakes defaults to 1
+    assert len(w.snakes) == 1
+    assert np.allclose(w.snakes[0].head_uw, np.array(w.size) / 2.0)
