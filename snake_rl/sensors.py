@@ -1,8 +1,8 @@
-"""Sensory observation: vision raycasting + smell field -> a fixed 75-float per-snake vector."""
+"""Sensory observation: vision raycasting + smell field -> a fixed 87-float per-snake vector."""
 import numpy as np
 from .world import torus_delta, torus_dist, segment_circle_hit
 
-OBS_DIM = 75
+OBS_DIM = 87
 
 
 def ray_dirs(cfg, heading):
@@ -12,7 +12,7 @@ def ray_dirs(cfg, heading):
 
 
 def _all_targets(world, snake):
-    """Returns (centers, radii, kind) where kind: 0=obstacle,1=chicken,2=self,3=other_body,4=egg."""
+    """Returns (centers, radii, kind) where kind: 0=obstacle,1=chicken,2=self,3=other_body,4=egg,5=corpse."""
     c = world.cfg
     parts = []
     if len(world.obstacle_pos):
@@ -29,6 +29,9 @@ def _all_targets(world, snake):
     eggs = world.eggs["pos"]
     if len(eggs):
         parts.append((eggs, np.full(len(eggs), c.egg_radius), np.full(len(eggs), 4)))
+    corpses = world.corpses["pos"]
+    if len(corpses):                                              # eaten at eat_radius = head_radius+chicken_radius
+        parts.append((corpses, np.full(len(corpses), c.chicken_radius), np.full(len(corpses), 5)))
     if not parts:
         return np.zeros((0, 2)), np.zeros((0,)), np.zeros((0,), int)
     cen = np.vstack([p[0] for p in parts])
@@ -39,7 +42,7 @@ def _all_targets(world, snake):
 
 def _scan(world, head, heading, snake=None):
     """Vectorized raycast of all rays at once. Returns (dirs (R,2), dist (R,), kind (R,))
-    with kind 0=obstacle,1=chicken,2=self,3=other_body,4=egg,-1=none. `snake` (default ego)
+    with kind 0=obstacle,1=chicken,2=self,3=other_body,4=egg,5=corpse,-1=none. `snake` (default ego)
     decides which body is "self" vs "other" -- independent of `head`/`heading` (an interpolated
     render pose need not match snake's exact stored pose)."""
     snake = snake if snake is not None else world.snakes[0]
@@ -71,7 +74,7 @@ def sense_vision(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
     _, dist, kinds = _scan(world, snake.head, snake.heading, snake)
-    out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0], (c.n_rays, 1))
+    out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (c.n_rays, 1))
     hit = kinds >= 0
     out[hit, 0] = dist[hit] / c.ray_range
     out[hit, 1 + kinds[hit]] = 1.0
@@ -106,13 +109,23 @@ def _smell_field(world, head, positions):
 
 
 def smell(world, snake=None):
+    c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
     fwd = snake.heading_vec()
     left = np.array([-fwd[1], fwd[0]])
     ci, cg = _smell_field(world, snake.head, world.chicken_pos)
     rival_heads = np.array([o.head for o in world.snakes if o is not snake and o.alive])
     si, sg = _smell_field(world, snake.head, rival_heads)
-    return np.array([ci, cg @ fwd, cg @ left, si, sg @ fwd, sg @ left], np.float32)
+    ki, kg = _smell_field(world, snake.head, world.corpses["pos"])
+    # ponytail: chicken/rival counts are structurally capped elsewhere (chicken_ceiling, n_max), so
+    # their raw intensity is already provably within the obs bound. Corpses have no such cap (they
+    # persist until eaten) -- clip to chicken_ceiling so observation_space.contains always holds
+    # regardless of how many uneaten corpses pile up.
+    ceil = float(c.chicken_ceiling)
+    ki = min(ki, ceil)
+    kf = float(np.clip(kg @ fwd, -ceil, ceil))
+    kl = float(np.clip(kg @ left, -ceil, ceil))
+    return np.array([ci, cg @ fwd, cg @ left, si, sg @ fwd, sg @ left, ki, kf, kl], np.float32)
 
 
 def _social(world, snake):
@@ -159,10 +172,10 @@ def _repro_ready(cfg, snake):
 def observe(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
-    vision = sense_vision(world, snake).astype(np.float32).flatten()      # 54
+    vision = sense_vision(world, snake).astype(np.float32).flatten()      # 63
     social = _social(world, snake)                                        # 7
     egg = _egg_channel(world, snake)                                      # 4
-    sm = smell(world, snake)                                              # 6
+    sm = smell(world, snake)                                              # 9
     proprio = np.array([
         np.clip(snake.energy / c.energy_max, 0.0, 1.0),
         np.clip(snake.target_length / c.length_cap, 0.0, 1.0),

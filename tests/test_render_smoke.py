@@ -25,9 +25,10 @@ def test_color_for_is_deterministic_and_distinct_for_0_to_5():
         assert all(0 <= ch <= 255 for ch in c)
 
 
-def test_ray_kind_covers_other_body_and_egg():
-    # B2 added ray kinds 3 (other_body) and 4 (egg); the sensor overlay must not KeyError on them.
-    assert set(RAY_KIND) == {-1, 0, 1, 2, 3, 4}
+def test_ray_kind_covers_other_body_egg_and_corpse():
+    # B2 added ray kinds 3 (other_body) and 4 (egg); corpse-sensing adds kind 5. The sensor
+    # overlay must not KeyError on any of them.
+    assert set(RAY_KIND) == {-1, 0, 1, 2, 3, 4, 5}
 
 
 def test_render_draws_multisnake_world_with_eggs_and_corpses():
@@ -57,6 +58,20 @@ def test_render_sensors_handle_other_body_and_egg_ray_kinds():
               "timer": np.array([10.0]), "owner": np.array([[5, 6]])}
     _, _, kinds = vision_distances(w, ego.head, ego.heading)
     assert 3 in kinds and 4 in kinds        # the scene actually produces both kinds, as claimed
+    r = Renderer(scale=4, show_sensors=True)
+    r.draw(w)      # must not KeyError
+    r.close()
+
+
+def test_render_sensors_handle_corpse_ray_kind():
+    # Force a ray to hit a corpse (kind 5) -- KeyErrors if RAY_KIND isn't extended for it.
+    from snake_rl.sensors import vision_distances
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
+    ego = w.snakes[0]
+    fwd = ego.heading_vec()
+    w.corpses = {"pos": ((ego.head_uw + fwd * 5.0) % w.size)[None].copy(), "food": np.array([5.0])}
+    _, _, kinds = vision_distances(w, ego.head, ego.heading)
+    assert 5 in kinds                       # the scene actually produces the corpse kind, as claimed
     r = Renderer(scale=4, show_sensors=True)
     r.draw(w)      # must not KeyError
     r.close()

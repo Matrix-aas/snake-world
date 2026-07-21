@@ -23,7 +23,8 @@ RING_TRACK = (44, 48, 58)
 RING_COLORS = ((96, 214, 120), (86, 200, 232), (240, 186, 72))
 RAY_NONE = (70, 92, 120); RAY_OBST = (226, 96, 84); RAY_CHICK = (240, 208, 96); RAY_SELF = (168, 128, 224)
 RAY_OTHER = (110, 200, 240); RAY_EGG = (240, 176, 224)          # B2 ray kinds 3=other_body, 4=egg
-RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG}
+RAY_CORPSE = (176, 132, 84)                                     # ray kind 5=corpse
+RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG, 5: RAY_CORPSE}
 
 
 def color_for(seed, s=0.55, v=0.92):
