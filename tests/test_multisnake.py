@@ -58,7 +58,9 @@ def test_two_phase_step_is_order_independent_head_to_head():
     w.snakes.append(b)
     # Precondition for order-independence: both snakes complete their phase-1 move before any death is resolved.
     out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
-    assert w.snakes[0].steps == 1 and w.snakes[1].steps == 1   # BOTH moved (phase 1) before any resolve
+    # Use the captured objects, not post-step w.snakes indices: both die this step ("snake" cause)
+    # and _prune_dead (Milestone B) drops dead non-ego opponents from w.snakes at the end of step.
+    assert a.steps == 1 and b.steps == 1   # BOTH moved (phase 1) before any resolve
 
 
 def test_dead_snake_becomes_corpse_and_is_edible():
@@ -99,3 +101,39 @@ def test_food_target_scales_with_live_snakes():
         w.maybe_spawn()
     assert len(w.chicken_pos) <= min(CFG.chicken_ceiling, round(CFG.chickens_per_snake_max * 4))
     assert len(w.chicken_pos) >= 1
+
+
+def test_all_snakes_eat_and_decay_and_ego_count():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.worldgen import generate_world
+    w = generate_world(CFG, seed=11, size=(140.0,140.0), n_snakes=3)
+    w.chicken_pos=np.zeros((0,2)); w.chicken_dir=np.zeros((0,)); w.chicken_id=np.zeros((0,),int)
+    opp = w.snakes[1]; opp.energy=10.0
+    w.chicken_pos=opp.head[None].copy(); w.chicken_dir=np.zeros(1); w.chicken_id=np.array([999])
+    assert w.try_eat() == 0            # ego ate nothing this call...
+    assert opp.energy > 10.0           # ...but the opponent did
+    # ego count is returned (place a chicken on the ego head)
+    ego=w.snakes[0]; w.chicken_pos=ego.head[None].copy(); w.chicken_dir=np.zeros(1); w.chicken_id=np.array([7])
+    assert w.try_eat() == 1
+    e=opp.energy; w.decay_energy(); assert opp.energy == max(0.0, e-CFG.energy_decay)
+
+
+def test_prune_keeps_ego_removes_dead_opponents():
+    from snake_rl.config import CFG
+    from snake_rl.worldgen import generate_world
+    w = generate_world(CFG, seed=12, size=(140.0,140.0), n_snakes=3)
+    w.snakes[2].alive=False; w._prune_dead()
+    assert len(w.snakes)==2 and all(s.alive for s in w.snakes[1:])
+    w.snakes[0].alive=False; w._prune_dead()
+    assert len(w.snakes)==2 and w.snakes[0].alive is False   # ego kept though dead
+
+
+def test_step_reports_detailed_deaths_and_hatches():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.worldgen import generate_world
+    w = generate_world(CFG, seed=13, size=(140.0,140.0), n_snakes=2)
+    w.snakes[1].energy = CFG.energy_decay/2    # opponent starves this step
+    out = w.step(1,0)
+    assert any(cause=="starve" for _id,cause in out["deaths_detailed"])

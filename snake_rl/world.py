@@ -267,12 +267,13 @@ class World:
         self.corpses["pos"] = np.vstack([self.corpses["pos"], pos]) if len(self.corpses["pos"]) else pos
         self.corpses["food"] = np.append(self.corpses["food"], food)
 
-    def try_eat(self):
-        """Eat any chicken OR corpse within eat_radius (nearest-image); each item counts once into n."""
+    def _snake_eat(self, s):
+        """Eat any chicken OR corpse OR foreign egg within eat_radius of s.head (nearest-image);
+        each item counts once into n, growth/energy applied to s, egg ownership keyed on s.id."""
         n = 0
         energy_gain = 0.0
         if len(self.chicken_pos):
-            d = torus_dist(self.chicken_pos, self.head, self.size)
+            d = torus_dist(self.chicken_pos, s.head, self.size)
             eaten = d <= self.cfg.eat_radius
             nc = int(eaten.sum())
             if nc:
@@ -283,7 +284,7 @@ class World:
                 n += nc
                 energy_gain += nc * self.cfg.energy_refill
         if len(self.corpses["pos"]):
-            d = torus_dist(self.corpses["pos"], self.head, self.size)
+            d = torus_dist(self.corpses["pos"], s.head, self.size)
             eaten = d <= self.cfg.eat_radius
             nk = int(eaten.sum())
             if nk:
@@ -293,10 +294,10 @@ class World:
                 self.corpses["food"] = self.corpses["food"][keep]
                 n += nk
         if len(self.eggs["pos"]):
-            eater_id = self.snakes[0].id
+            eater_id = s.id
             owner = self.eggs["owner"]
             foreign = (owner[:, 0] != eater_id) & (owner[:, 1] != eater_id)
-            d = torus_dist(self.eggs["pos"], self.head, self.size)
+            d = torus_dist(self.eggs["pos"], s.head, self.size)
             eaten = foreign & (d <= self.cfg.eat_radius)
             ne = int(eaten.sum())
             if ne:
@@ -307,13 +308,31 @@ class World:
                 n += ne
                 energy_gain += ne * self.cfg.egg_food
         if n:
-            self.target_length = min(self.cfg.length_cap,
-                                     self.target_length + n * self.cfg.grow_per_chicken)
-            self.energy = min(self.cfg.energy_max, self.energy + energy_gain)
+            s.target_length = min(self.cfg.length_cap,
+                                   s.target_length + n * self.cfg.grow_per_chicken)
+            s.energy = min(self.cfg.energy_max, s.energy + energy_gain)
         return n
 
+    def try_eat(self):
+        """Every live snake eats independently; returns the EGO's count from this single pass
+        (never re-runs _snake_eat on the ego, which would double-consume already-cleared arrays)."""
+        ate_ego = 0
+        for s in self.snakes:
+            if not s.alive:
+                continue
+            n = self._snake_eat(s)
+            if s is self.snakes[0]:
+                ate_ego = n
+        return ate_ego
+
     def decay_energy(self):
-        self.energy = max(0.0, self.energy - self.cfg.energy_decay)
+        for s in self.snakes:
+            if s.alive:
+                s.energy = max(0.0, s.energy - self.cfg.energy_decay)
+
+    def _prune_dead(self):
+        """Drop dead non-ego opponents (ego kept in slot 0 even when dead)."""
+        self.snakes = [self.snakes[0]] + [s for s in self.snakes[1:] if s.alive]
 
     def _free_point(self, radius):
         best = None; best_clear = -np.inf
@@ -359,10 +378,12 @@ class World:
         e["owner"] = np.vstack([e["owner"], row]) if len(e["owner"]) else row
 
     def _hatch_eggs(self):
+        """Returns owner-sets (frozenset of parent ids) of eggs that produced a hatchling this step."""
         c = self.cfg
         e = self.eggs
+        hatched_owners = []
         if not len(e["pos"]):
-            return
+            return hatched_owners
         e["timer"] = e["timer"] - 1
         hatch = e["timer"] <= 0
         if hatch.any():
@@ -380,8 +401,10 @@ class World:
                     id=sid, color_seed=sid,
                 ))
                 n_alive += 1
+                hatched_owners.append(frozenset(int(x) for x in e["owner"][i]))
             keep = ~hatch
             e["pos"] = e["pos"][keep]; e["timer"] = e["timer"][keep]; e["owner"] = e["owner"][keep]
+        return hatched_owners
 
     def _resolve_mating(self):
         c = self.cfg
@@ -479,7 +502,8 @@ class World:
             s.alive = False; s.death_cause = cause
             self._spawn_corpse(s)
         deaths = [s.id for s, _ in dying]
-        # phase 3: chickens, eat, energy decay, starvation, spawn, mating, hatching (ego-centric eat/decay for now)
+        deaths_detailed = [(s.id, cause) for s, cause in dying]
+        # phase 3: chickens, eat, energy decay, starvation, spawn, mating, hatching (every live snake)
         self.update_chickens()
         ate = self.try_eat()
         self.decay_energy()
@@ -487,10 +511,13 @@ class World:
             if s.alive and s.energy <= 0:
                 s.alive = False; s.death_cause = "starve"
                 self._spawn_corpse(s)
+                deaths_detailed.append((s.id, "starve"))
         self.maybe_spawn()
         self._resolve_mating()
-        self._hatch_eggs()
-        return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths}
+        hatched_owners = self._hatch_eggs()
+        self._prune_dead()
+        return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths,
+                "deaths_detailed": deaths_detailed, "hatched_owners": hatched_owners}
 
 
 def _ego_prop(name):
