@@ -104,6 +104,8 @@ class World:
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
+        self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int)}
+        self._mate_streak = {}
 
     # --- motion (per-snake workers) ---
     def _move_snake(self, s, steering, dash):
@@ -331,6 +333,44 @@ class World:
     def maybe_spawn_forced(self):
         self._add_chicken(self._free_point(self.cfg.chicken_radius))
 
+    # --- reproduction ---
+    def _lay_egg(self, pos, id_a, id_b):
+        e = self.eggs
+        e["pos"] = np.vstack([e["pos"], pos[None]]) if len(e["pos"]) else pos[None].copy()
+        e["timer"] = np.append(e["timer"], self.cfg.egg_timer)
+        row = np.array([[id_a, id_b]])
+        e["owner"] = np.vstack([e["owner"], row]) if len(e["owner"]) else row
+
+    def _resolve_mating(self):
+        c = self.cfg
+        for s in self.snakes:
+            if s.repro_cooldown > 0:
+                s.repro_cooldown -= 1
+        live = [s for s in self.snakes if s.alive]
+        seen = set()
+        for i in range(len(live)):
+            for j in range(i + 1, len(live)):
+                a, b = live[i], live[j]
+                key = frozenset((a.id, b.id)); seen.add(key)
+                ready = (a.energy > c.repro_energy_frac * c.energy_max and
+                         b.energy > c.repro_energy_frac * c.energy_max and
+                         a.target_length > c.repro_length_min and b.target_length > c.repro_length_min and
+                         a.repro_cooldown == 0 and b.repro_cooldown == 0)
+                close = torus_dist(a.head_uw[None], b.head_uw, self.size)[0] <= c.r_mate
+                if ready and close:
+                    self._mate_streak[key] = self._mate_streak.get(key, 0) + 1
+                    if self._mate_streak[key] >= c.mate_steps:
+                        mid = wrap(a.head_uw + torus_delta(b.head_uw, a.head_uw, self.size) / 2, self.size)
+                        self._lay_egg(mid, a.id, b.id)
+                        a.energy -= c.repro_cost; b.energy -= c.repro_cost
+                        a.repro_cooldown = c.repro_cooldown; b.repro_cooldown = c.repro_cooldown
+                        self._mate_streak[key] = 0
+                else:
+                    self._mate_streak.pop(key, None)
+        for key in list(self._mate_streak):          # forget pairs that no longer both live
+            if key not in seen:
+                del self._mate_streak[key]
+
     # --- collisions & full step ---
     def _other_hazard(self, s):
         pts, rads = [], []
@@ -402,6 +442,7 @@ class World:
         ate = self.try_eat()
         self.decay_energy()
         self.maybe_spawn()
+        self._resolve_mating()
         return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths}
 
 
