@@ -292,6 +292,20 @@ class World:
                 self.corpses["pos"] = self.corpses["pos"][keep]
                 self.corpses["food"] = self.corpses["food"][keep]
                 n += nk
+        if len(self.eggs["pos"]):
+            eater_id = self.snakes[0].id
+            owner = self.eggs["owner"]
+            foreign = (owner[:, 0] != eater_id) & (owner[:, 1] != eater_id)
+            d = torus_dist(self.eggs["pos"], self.head, self.size)
+            eaten = foreign & (d <= self.cfg.eat_radius)
+            ne = int(eaten.sum())
+            if ne:
+                keep = ~eaten
+                self.eggs["pos"] = self.eggs["pos"][keep]
+                self.eggs["timer"] = self.eggs["timer"][keep]
+                self.eggs["owner"] = self.eggs["owner"][keep]
+                n += ne
+                energy_gain += ne * self.cfg.egg_food
         if n:
             self.target_length = min(self.cfg.length_cap,
                                      self.target_length + n * self.cfg.grow_per_chicken)
@@ -340,6 +354,31 @@ class World:
         e["timer"] = np.append(e["timer"], self.cfg.egg_timer)
         row = np.array([[id_a, id_b]])
         e["owner"] = np.vstack([e["owner"], row]) if len(e["owner"]) else row
+
+    def _hatch_eggs(self):
+        c = self.cfg
+        e = self.eggs
+        if not len(e["pos"]):
+            return
+        e["timer"] = e["timer"] - 1
+        hatch = e["timer"] <= 0
+        if hatch.any():
+            n_alive = sum(1 for s in self.snakes if s.alive)
+            for i in np.nonzero(hatch)[0]:
+                if n_alive >= c.n_max:
+                    continue
+                pos = e["pos"][i].copy()
+                sid = self._next_snake_id
+                self._next_snake_id += 1
+                self.snakes.append(Snake(
+                    head_uw=pos, head=wrap(pos, self.size), heading=float(self.rng.uniform(0, 2 * np.pi)),
+                    path_uw=[pos.copy()], target_length=c.start_length,
+                    stamina=c.s_max, energy=c.hatch_energy_frac * c.energy_max, _prev_head_uw=pos.copy(),
+                    id=sid, color_seed=sid,
+                ))
+                n_alive += 1
+            keep = ~hatch
+            e["pos"] = e["pos"][keep]; e["timer"] = e["timer"][keep]; e["owner"] = e["owner"][keep]
 
     def _resolve_mating(self):
         c = self.cfg
@@ -443,6 +482,7 @@ class World:
         self.decay_energy()
         self.maybe_spawn()
         self._resolve_mating()
+        self._hatch_eggs()
         return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths}
 
 

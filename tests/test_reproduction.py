@@ -34,3 +34,26 @@ def test_no_egg_if_separated_before_streak_completes():
     for _ in range(CFG.mate_steps):
         w._resolve_mating()
     assert w.eggs["pos"].shape[0] == 0
+
+
+def test_egg_hatches_into_new_snake():
+    w = World(CFG, seed=8, size=(80.0, 80.0))
+    w.eggs = {"pos": np.array([[40.0, 40.0]]), "timer": np.array([1.0]),
+              "owner": np.array([[0, 1]])}
+    n0 = len(w.snakes)
+    w._hatch_eggs()                                        # timer 1 -> 0 -> hatch
+    assert len(w.snakes) == n0 + 1
+    baby = w.snakes[-1]
+    assert baby.target_length == CFG.start_length
+    assert np.allclose(baby.head_uw, np.array([40.0, 40.0]))
+    assert w.eggs["pos"].shape[0] == 0
+
+
+def test_parent_cannot_eat_own_egg_but_rival_can():
+    w = World(CFG, seed=8, size=(80.0, 80.0))
+    ego = w.snakes[0]; ego.id = 0; ego.head = np.array([40.0, 40.0]); ego.energy = 10.0
+    w.eggs = {"pos": np.array([[40.0, 40.0]]), "timer": np.array([30.0]), "owner": np.array([[0, 1]])}
+    assert w.try_eat() == 0 and w.eggs["pos"].shape[0] == 1     # own egg: not eaten
+    ego.id = 5                                                  # now a non-owner
+    assert w.try_eat() == 1 and w.eggs["pos"].shape[0] == 0     # foreign egg: eaten
+    assert ego.energy == 10.0 + CFG.egg_food
