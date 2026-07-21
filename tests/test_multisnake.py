@@ -59,3 +59,19 @@ def test_two_phase_step_is_order_independent_head_to_head():
     # will be lethal once Task 4 wires _other_hazard; here assert the step runs both moves first
     out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
     assert w.snakes[0].steps == 1 and w.snakes[1].steps == 1   # BOTH moved (phase 1) before any resolve
+
+
+def test_dead_snake_becomes_corpse_and_is_edible():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.world import World, wrap
+    w = World(CFG, seed=5, size=(80.0, 80.0))
+    w.chicken_pos = np.zeros((0, 2)); w.chicken_dir = np.zeros((0,)); w.chicken_id = np.zeros((0,), int)
+    w._spawn_corpse(w.snakes[0])
+    assert w.corpses["pos"].shape == (1, 2)
+    assert w.corpses["food"][0] == CFG.corpse_food_per_length * w.snakes[0].target_length
+    # move ego onto the corpse -> eats it (one item), energy up, corpse gone
+    w.snakes[0].energy = 10.0
+    w.snakes[0].head = w.corpses["pos"][0].copy()
+    n = w.try_eat()
+    assert n == 1 and w.corpses["pos"].shape == (0, 2) and w.snakes[0].energy > 10.0

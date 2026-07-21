@@ -103,6 +103,7 @@ class World:
         self._next_chicken_id = 0
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
+        self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
 
     # --- motion (per-snake workers) ---
     def _move_snake(self, s, steering, dash):
@@ -258,20 +259,41 @@ class World:
                     self.chicken_dir[i] = a                             # keep heading consistent for wander
                     break
 
+    def _spawn_corpse(self, s):
+        food = self.cfg.corpse_food_per_length * s.target_length
+        pos = s.head[None].copy()
+        self.corpses["pos"] = np.vstack([self.corpses["pos"], pos]) if len(self.corpses["pos"]) else pos
+        self.corpses["food"] = np.append(self.corpses["food"], food)
+
     def try_eat(self):
-        if len(self.chicken_pos) == 0:
-            return 0
-        d = torus_dist(self.chicken_pos, self.head, self.size)
-        eaten = d <= self.cfg.eat_radius
-        n = int(eaten.sum())
+        """Eat any chicken OR corpse within eat_radius (nearest-image); each item counts once into n."""
+        n = 0
+        energy_gain = 0.0
+        if len(self.chicken_pos):
+            d = torus_dist(self.chicken_pos, self.head, self.size)
+            eaten = d <= self.cfg.eat_radius
+            nc = int(eaten.sum())
+            if nc:
+                keep = ~eaten
+                self.chicken_pos = self.chicken_pos[keep]
+                self.chicken_dir = self.chicken_dir[keep]
+                self.chicken_id = self.chicken_id[keep]
+                n += nc
+                energy_gain += nc * self.cfg.energy_refill
+        if len(self.corpses["pos"]):
+            d = torus_dist(self.corpses["pos"], self.head, self.size)
+            eaten = d <= self.cfg.eat_radius
+            nk = int(eaten.sum())
+            if nk:
+                keep = ~eaten
+                energy_gain += float(self.corpses["food"][eaten].sum())
+                self.corpses["pos"] = self.corpses["pos"][keep]
+                self.corpses["food"] = self.corpses["food"][keep]
+                n += nk
         if n:
-            keep = ~eaten
-            self.chicken_pos = self.chicken_pos[keep]
-            self.chicken_dir = self.chicken_dir[keep]
-            self.chicken_id = self.chicken_id[keep]
             self.target_length = min(self.cfg.length_cap,
                                      self.target_length + n * self.cfg.grow_per_chicken)
-            self.energy = min(self.cfg.energy_max, self.energy + n * self.cfg.energy_refill)
+            self.energy = min(self.cfg.energy_max, self.energy + energy_gain)
         return n
 
     def decay_energy(self):
@@ -372,7 +394,8 @@ class World:
         # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
         dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]
         for s, cause in dying:
-            s.alive = False; s.death_cause = cause     # Task 6 adds: self._spawn_corpse(s)
+            s.alive = False; s.death_cause = cause
+            self._spawn_corpse(s)
         deaths = [s.id for s, _ in dying]
         # phase 3: world updates (chickens/eat/energy/spawn) — ego-centric for now
         self.update_chickens()
