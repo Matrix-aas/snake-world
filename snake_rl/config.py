@@ -31,7 +31,7 @@ class Config:
     stamina_regen_easy: float = 0.6
     dash_min_stamina_easy: float = 0.05
     # curriculum: keep easy for the first `hardness_warmup` of training, ramp to full-hard by `hardness_full`
-    hardness_warmup: float = 0.35
+    hardness_warmup: float = 0.42    # longer warmup -> a stronger hunter before the reserve tightens
     hardness_full: float = 0.85
     # geometry
     head_radius: float = 1.0
