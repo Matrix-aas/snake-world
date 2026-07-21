@@ -223,15 +223,22 @@ def test_observation_space_contains_crowded_stress_world():
 
 
 def test_observation_space_contains_corpse_pileup_beyond_ceiling():
-    # corpses have no structural population cap (unlike chickens/rivals) -- pile up MORE than
-    # chicken_ceiling of them near the ego to prove the corpse-smell bound holds even then.
+    # corpses have no structural population cap (unlike chickens/rivals) -- pack MORE than
+    # chicken_ceiling of them right next to the ego's head so the RAW smell sum genuinely
+    # crosses chicken_ceiling (not just "stays under it"), proving sensors.smell's defensive
+    # clip actually engages rather than being a no-op safety margin.
     from snake_rl.env import SnakeEnv
     env = SnakeEnv(seed=0)
     w = generate_world(CFG, seed=23, size=(140.0, 140.0), n_snakes=CFG.n_max)
     ego = w.snakes[0]
     n = CFG.chicken_ceiling * 3
-    positions = np.array([wrap(ego.head + np.array([0.5 + 0.2 * i, 0.0]), w.size) for i in range(n)])
+    positions = np.array([wrap(ego.head + np.array([0.05 + 0.03 * i, 0.0]), w.size) for i in range(n)])
     w.corpses = {"pos": positions, "food": np.full(n, 5.0)}
     for s in w.snakes:
         o = observe(w, s)
         assert env.observation_space.contains(o), f"snake {s.id} obs out of bounds"
+    ego_obs = observe(w, ego)
+    # raw (unclipped) intensity/fwd-gradient here are ~23.8/~12.5 -- both above chicken_ceiling=12
+    # -- so landing exactly on the ceiling proves the clip fired, not that we stayed under it.
+    assert ego_obs[80] == CFG.chicken_ceiling             # corpse_intensity clipped to the ceiling
+    assert ego_obs[81] == CFG.chicken_ceiling             # corpse_grad_fwd clipped to the ceiling

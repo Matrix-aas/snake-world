@@ -122,7 +122,7 @@ def smell(world, snake=None):
     # persist until eaten) -- clip to chicken_ceiling so observation_space.contains always holds
     # regardless of how many uneaten corpses pile up.
     ceil = float(c.chicken_ceiling)
-    ki = min(ki, ceil)
+    ki = float(np.clip(ki, 0.0, ceil))
     kf = float(np.clip(kg @ fwd, -ceil, ceil))
     kl = float(np.clip(kg @ left, -ceil, ceil))
     return np.array([ci, cg @ fwd, cg @ left, si, sg @ fwd, sg @ left, ki, kf, kl], np.float32)
