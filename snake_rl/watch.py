@@ -96,6 +96,31 @@ def _snake_snap(world):
     return {s.id: world._body_render_path_uw(s) for s in world.snakes if s.alive}
 
 
+def _gore_state(world):
+    """Snapshot the state we diff across a step to fire gore effects on the REAL events:
+    {chicken_id: pos}, {corpse position}, {live snake id}."""
+    return ({int(i): world.chicken_pos[k].copy() for k, i in enumerate(world.chicken_id)},
+            {(round(float(p[0]), 2), round(float(p[1]), 2)) for p in world.corpses["pos"]},
+            {s.id for s in world.snakes if s.alive})
+
+
+def _emit_gore(renderer, before, world):
+    """Compare pre/post-step state and trigger blood/gore at the real strike points (covers EVERY
+    snake, not just the ego): a chicken that vanished -> eat burst + decal; a new corpse -> death
+    burst + decal; a newly-alive snake id -> egg-hatch shell crack."""
+    ch_before, corpses_before, ids_before = before
+    ch_now = {int(i) for i in world.chicken_id}
+    for cid, pos in ch_before.items():
+        if cid not in ch_now:
+            renderer.spawn_eat(pos)
+    for p in world.corpses["pos"]:
+        if (round(float(p[0]), 2), round(float(p[1]), 2)) not in corpses_before:
+            renderer.spawn_death(p.copy())
+    for s in world.snakes:
+        if s.alive and s.id not in ids_before:
+            renderer.spawn_hatch(s.head.copy())
+
+
 def _interp_bodies(prev, cur, f):
     """Blend each live snake's body by stable id (same idea as _interp_chickens); a snake missing
     from `prev` (just hatched) or grown/shrunk is handled by _interp_body's own length-mismatch."""
@@ -266,9 +291,9 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                 since += frame_dt
                 while since >= interval:
                     since -= interval
-                    out = _step_world(world, controller)
-                    if out["ate"]:
-                        renderer.add_flash(world.snakes[0].head.copy())   # catch effect at the strike
+                    before = _gore_state(world)
+                    _step_world(world, controller)
+                    _emit_gore(renderer, before, world)                   # blood/gore on eat/death/hatch
                     alive_ids = {s.id for s in world.snakes if s.alive}
                     if follow_id not in alive_ids:            # camera re-targets on death, else overview
                         follow_id = next(iter(alive_ids), world.snakes[0].id)
