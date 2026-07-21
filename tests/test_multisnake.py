@@ -137,3 +137,41 @@ def test_step_reports_detailed_deaths_and_hatches():
     w.snakes[1].energy = CFG.energy_decay/2    # opponent starves this step
     out = w.step(1,0)
     assert any(cause=="starve" for _id,cause in out["deaths_detailed"])
+
+
+def test_hatched_owners_reported_and_cap_drops_pay_nothing():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.worldgen import generate_world
+    # below n_max: a timer-expired egg hatches into a new snake, owner-set reported
+    w = generate_world(CFG, seed=14, size=(140.0, 140.0), n_snakes=3)
+    w.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[0, 1]])}
+    n0 = len(w.snakes)
+    owners = w._hatch_eggs()
+    assert len(w.snakes) == n0 + 1
+    assert frozenset({0, 1}) in owners
+    # at n_max: the egg is still consumed, but produces no hatchling -> its owner-set pays nothing
+    w2 = generate_world(CFG, seed=15, size=(150.0, 150.0), n_snakes=CFG.n_max)
+    assert len(w2.snakes) == CFG.n_max
+    w2.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[2, 3]])}
+    owners2 = w2._hatch_eggs()
+    assert len(w2.snakes) == CFG.n_max          # no hatchling: population stays capped
+    assert w2.eggs["pos"].shape[0] == 0         # egg consumed regardless
+    assert frozenset({2, 3}) not in owners2
+
+
+def test_deaths_detailed_reports_phase2_snake_cause():
+    # Two snakes driven head-on into each other: cause "snake" for BOTH, surfaced per-id.
+    from snake_rl.world import World, Snake, wrap
+    import numpy as np
+    w = World(CFG, seed=2, size=(80.0, 80.0))
+    a = w.snakes[0]
+    a.head_uw = np.array([40.0, 40.0]); a.head = wrap(a.head_uw, w.size)
+    a.heading = 0.0; a.path_uw = [a.head_uw.copy()]; a._prev_head_uw = a.head_uw.copy()
+    b = Snake(head_uw=np.array([43.0, 40.0]), head=wrap(np.array([43.0, 40.0]), w.size),
+              heading=np.pi, path_uw=[np.array([43.0, 40.0])], target_length=CFG.start_length,
+              stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0, 40.0]), id=1)
+    w.snakes.append(b)
+    out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
+    causes = dict(out["deaths_detailed"])
+    assert causes.get(0) == "snake" and causes.get(1) == "snake"
