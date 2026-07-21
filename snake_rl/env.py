@@ -87,8 +87,6 @@ class SnakeEnv(gym.Env):
             mate_steps=int(round(lerp(b.mate_steps_easy, b.mate_steps))),
             repro_length_min=lerp(b.repro_length_min_easy, b.repro_length_min),
         )
-        if b.auto_lay_warmup_enabled and getattr(self, "world", None) is not None:
-            self.world.auto_lay_warmup = (h < b.auto_lay_until)
 
     def _phi(self):
         _, d = self.world.nearest_chicken()
@@ -105,8 +103,6 @@ class SnakeEnv(gym.Env):
         world_seed = int(self.np_random.integers(0, 2 ** 31 - 1))
         n = int(self.np_random.integers(self.cfg.n_start_min, self.cfg.n_start_max + 1))   # [C-1] spawn N
         self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size, n_snakes=n)
-        if self._base_cfg.auto_lay_warmup_enabled:
-            self.world.auto_lay_warmup = (self._hardness < self._base_cfg.auto_lay_until)
         self._opp.reset_all()                  # [I-1] drop stale opponent frame rings for the new world
         self._last_phi = self._phi()
         self._last_ids = frozenset(int(i) for i in self.world.chicken_id)

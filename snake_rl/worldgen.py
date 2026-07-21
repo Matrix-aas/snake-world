@@ -30,8 +30,6 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1):
         for i in range(n_snakes):
             for _ in range(200):
                 p = w._free_point(cfg.head_radius)
-                if p is None:
-                    break
                 if not placed or (torus_dist(np.array(placed), p, w.size) > 2 * cfg.r_flee).all():
                     placed.append(p); break
             else:

@@ -80,8 +80,6 @@ def _reseed_floor(world, controller):
     n_alive = sum(1 for s in world.snakes if s.alive)
     while n_alive < c.n_start_min:
         p = world._free_point(c.head_radius)
-        if p is None:                  # near-packed world (worldgen's own generation avoids this)
-            break
         sid = world._next_snake_id
         world._next_snake_id += 1
         world.snakes.append(Snake(

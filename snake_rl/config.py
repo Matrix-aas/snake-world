@@ -25,7 +25,7 @@ class Config:
     v_flee: float = 1.15
     r_flee: float = 12.0             # WALK alert distance; catching a runner needs a dash burst
     r_flee_peck: float = 2.5         # a head-down PECKING chicken is distracted: only startles when a
-                                     # snake is THIS close (< r_flee) -> the stalk-and-pounce catch window
+                                     # snake is THIS close (< r_flee_peck) -> the stalk-and-pounce catch window
     # behavior FSM (peck/walk/flee): a chicken pecks in place (prime catch window), ambles, then on
     # threat freezes in surprise for a beat and bolts. Durations in steps (staggered by rng at spawn).
     chicken_peck_min: int = 12
@@ -34,8 +34,6 @@ class Config:
     chicken_walk_max: int = 45
     chicken_startle_steps: int = 4   # entering flee: FREEZE (speed 0) for this many steps, then bolt at v_flee
     chicken_radius: float = 1.0
-    max_chickens: int = 5
-    min_chickens: int = 3            # keep the world populated (fast refill below this)
     spawn_period: int = 90           # avg steps between random spawns between min and max
     # food, population-scaled (rates; Task 9 derives the live target from snake count)
     chickens_per_snake_max: float = 2.0
@@ -94,8 +92,6 @@ class Config:
     r_mate_easy: float = 12.0
     mate_steps_easy: int = 1
     repro_length_min_easy: float = 6.0
-    auto_lay_until: float = 0.15     # while hardness < this, flag the world for the auto-lay fallback...
-    auto_lay_warmup_enabled: bool = False  # ...but the fallback is OFF by default (B4 flips it if the gate fails)
     # sensing
     n_rays: int = 9
     fov_deg: float = 270.0           # total arc, centered forward (±135°)

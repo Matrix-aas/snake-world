@@ -112,7 +112,6 @@ class World:
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
         self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int)}
         self._mate_streak = {}
-        self.auto_lay_warmup = False                     # set by env.set_hardness; read by B4's _auto_lay fallback
 
     # --- motion (per-snake workers) ---
     def _move_snake(self, s, steering, dash):
@@ -308,7 +307,9 @@ class World:
             if self.chicken_state[i] != 2:                                  # startle-FREEZE on ENTERING flee
                 self.chicken_state[i] = 2
                 self.chicken_startle[i] = c.chicken_startle_steps
-            weight = c.r_flee - dist[near]                                  # linear falloff, ->0 at r_flee
+            # linear falloff, ->0 at r_flee (the WALK/flee alert radius; for a PECK-triggered startle
+            # the alert is the tighter r_flee_peck, so weight there bottoms out at ~r_flee-r_flee_peck)
+            weight = c.r_flee - dist[near]
             away = -to_heads[near] / dist[near, None]
             repulsion = (weight[:, None] * away).sum(axis=0)
             if np.linalg.norm(repulsion) > 1e-6:
@@ -428,7 +429,8 @@ class World:
                 continue
             if torus_dist(self.head, p, self.size) < self.cfg.r_flee:
                 continue
-            body = self.body_points()
+            live = [o for o in self.snakes if o.alive]      # clear EVERY live snake's body, not just the ego
+            body = np.concatenate([self._body_points(o) for o in live], axis=0) if live else np.zeros((0, 2))
             if len(body) and (torus_dist(body, p, self.size) < radius + self.cfg.body_radius).any():
                 continue
             return p

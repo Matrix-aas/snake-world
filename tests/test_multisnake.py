@@ -100,7 +100,9 @@ def test_food_target_scales_with_live_snakes():
     for _ in range(400):
         w.maybe_spawn()
     assert len(w.chicken_pos) <= min(CFG.chicken_ceiling, round(CFG.chickens_per_snake_max * 4))
-    assert len(w.chicken_pos) >= 1
+    # discriminates against the old static cap: the count must reach the population-scaled floor,
+    # not just any count between 1 and 8 (which a static max_chickens=5 would also satisfy).
+    assert len(w.chicken_pos) >= round(CFG.chickens_per_snake_min * 4)
 
 
 def test_all_snakes_eat_and_decay_and_ego_count():

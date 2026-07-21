@@ -281,8 +281,7 @@ All tunable numbers live in one frozen `Config`. `assert_invariants(cfg)` runs a
 
 **World / population:** `world_size 110–160` (up from the single-snake game's 60–100),
 `n_start_min/max 2/4`, `n_max 6`. **Food scales with population** (rates, not absolutes, since
-`Config` is frozen): `chickens_per_snake_max/min 2.0/1.0`, hard cap `chicken_ceiling 12`
-(`min_chickens`/`max_chickens` are vestigial single-snake fields — no longer read anywhere).
+`Config` is frozen): `chickens_per_snake_max/min 2.0/1.0`, hard cap `chicken_ceiling 12`.
 
 **Stamina/dash** (unchanged from the single-snake game, except `stamina_regen` — see "eased"
 below): `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curriculum

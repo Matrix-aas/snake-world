@@ -137,7 +137,8 @@ def test_spawn_respects_max():
     # Task 9: target is population-scaled, not the static CFG.max_chickens.
     w = World(CFG, seed=2, size=(60, 60))
     n_alive = max(1, sum(1 for s in w.snakes if s.alive))
-    max_target = round(np.clip(CFG.chickens_per_snake_max * n_alive, 1, CFG.chicken_ceiling))
+    # mirrors world.maybe_spawn's round-then-clip order (world.py: int(np.clip(round(rate*n), 1, ceiling)))
+    max_target = int(np.clip(round(CFG.chickens_per_snake_max * n_alive), 1, CFG.chicken_ceiling))
     w.set_chickens(np.zeros((max_target, 2)))
     for _ in range(1000):
         w.maybe_spawn()
@@ -149,8 +150,9 @@ def test_spawn_refills_to_minimum():
     # clamped to chicken_ceiling), not the static CFG.min_chickens/max_chickens.
     w = World(CFG, seed=3, size=(80, 80))
     n_alive = max(1, sum(1 for s in w.snakes if s.alive))
-    max_target = round(np.clip(CFG.chickens_per_snake_max * n_alive, 1, CFG.chicken_ceiling))
-    min_target = round(np.clip(CFG.chickens_per_snake_min * n_alive, 1, max_target))
+    # mirrors world.maybe_spawn's round-then-clip order (world.py: int(np.clip(round(rate*n), 1, ceiling)))
+    max_target = int(np.clip(round(CFG.chickens_per_snake_max * n_alive), 1, CFG.chicken_ceiling))
+    min_target = int(np.clip(round(CFG.chickens_per_snake_min * n_alive), 1, max_target))
     w.set_chickens(np.zeros((0, 2)))                  # empty world
     for _ in range(300):
         w.maybe_spawn()
