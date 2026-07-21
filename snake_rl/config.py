@@ -7,8 +7,12 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Config:
     # world
-    world_size_min: float = 60.0
-    world_size_max: float = 100.0
+    world_size_min: float = 110.0
+    world_size_max: float = 160.0
+    # population
+    n_start_min: int = 2
+    n_start_max: int = 4
+    n_max: int = 6
     # snake motion
     v_snake: float = 1.0
     v_dash: float = 2.0
@@ -21,6 +25,10 @@ class Config:
     max_chickens: int = 5
     min_chickens: int = 3            # keep the world populated (fast refill below this)
     spawn_period: int = 90           # avg steps between random spawns between min and max
+    # food, population-scaled (rates; Task 9 derives the live target from snake count)
+    chickens_per_snake_max: float = 2.0
+    chickens_per_snake_min: float = 1.0
+    chicken_ceiling: int = 12        # hard cap regardless of population
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
@@ -49,6 +57,17 @@ class Config:
     start_length: float = 6.0        # target body length (> neck-skip); the body fills in over the first few steps
     grow_per_chicken: float = 2.0
     length_cap: float = 24.0         # > tightest-curl circumference (~22.5) so self-collision is reachable, < world/2
+    # reproduction / eggs / corpses
+    repro_energy_frac: float = 0.7   # min energy fraction to qualify for mating
+    repro_length_min: float = 10.0   # min body length to qualify for mating
+    r_mate: float = 4.0              # mating distance
+    mate_steps: int = 4              # steps two qualified snakes must hold mating distance
+    repro_cost: float = 30.0         # energy spent by each parent on a successful mating
+    repro_cooldown: int = 120        # steps before a snake can mate again
+    egg_timer: int = 45              # steps until an egg hatches
+    hatch_energy_frac: float = 0.5   # hatchling starting energy fraction
+    egg_food: float = 25.0           # food value if an egg is eaten instead of hatching
+    corpse_food_per_length: float = 4.0  # food value of a dead snake's corpse, per unit length
     # sensing
     n_rays: int = 9
     fov_deg: float = 270.0           # total arc, centered forward (±135°)
@@ -59,6 +78,7 @@ class Config:
     gamma: float = 0.99              # reliable for discovering hunting (0.995 slowed early value learning)
     # reward
     reward_eat: float = 10.0
+    reward_repro: float = 12.0
     reward_death: float = -10.0
     step_penalty: float = 0.01
     dash_penalty: float = 0.0        # dashing is rationed by the stamina reserve itself (gate + slow regen),
@@ -88,6 +108,15 @@ def assert_invariants(cfg: Config) -> None:
     #     (vision inflates targets by head_radius, so include it in the reach)
     assert cfg.ray_range + cfg.obstacle_radius_max + cfg.head_radius < cfg.world_size_min / 2, \
         "ray_range too large for nearest-image raycasting on the smallest world"
+    # (7) two snakes can sit at mating distance without a forced cut-off
+    assert cfg.r_mate >= 2 * cfg.head_radius, "r_mate too small: mating forces a collision"
+    # (8) a snake that just crossed the energy threshold can pay the repro cost and live
+    assert cfg.repro_cost < cfg.repro_energy_frac * cfg.energy_max, "repro_cost exceeds the mating gate"
+    # (9) hatchling viable
+    assert cfg.hatch_energy_frac * cfg.energy_max > 0 and cfg.start_length >= (
+        cfg.head_radius + cfg.body_radius + cfg.v_dash + cfg.segment_spacing), "hatchling not viable"
+    # (10) food ceiling covers the population-scaled demand (soft feasibility)
+    assert cfg.chicken_ceiling >= cfg.chickens_per_snake_max * cfg.n_max, "chicken_ceiling too low"
 
 
 CFG = Config()

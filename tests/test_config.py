@@ -34,3 +34,15 @@ def test_self_collision_reachable():
     c = CFG
     turn_circumference = 2 * math.pi * c.v_snake / math.radians(c.turn_deg)
     assert turn_circumference < c.length_cap   # a full curl fits inside the body -> head can hit itself
+
+
+def test_multisnake_invariants_hold():
+    from snake_rl.config import CFG, assert_invariants
+    assert_invariants(CFG)                                  # must not raise
+    assert CFG.world_size_min == 110.0 and CFG.n_max == 6
+    # mating distance lets two snakes coexist without a forced cut-off
+    assert CFG.r_mate >= 2 * CFG.head_radius
+    # a just-qualified snake can pay the repro cost and survive
+    assert CFG.repro_cost < CFG.repro_energy_frac * CFG.energy_max
+    # food ceiling covers the population-scaled max
+    assert CFG.chicken_ceiling >= CFG.chickens_per_snake_max * CFG.n_max
