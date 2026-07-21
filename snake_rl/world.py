@@ -1,6 +1,29 @@
 """Continuous-torus simulation: torus geometry helpers + the World state machine."""
 from __future__ import annotations
+from dataclasses import dataclass
 import numpy as np
+
+
+@dataclass
+class Snake:
+    head_uw: np.ndarray
+    head: np.ndarray
+    heading: float
+    path_uw: list
+    target_length: float
+    stamina: float
+    energy: float
+    _prev_head_uw: np.ndarray
+    id: int = 0
+    color_seed: int = 0
+    alive: bool = True
+    dashed: bool = False
+    death_cause: object = None
+    steps: int = 0
+    repro_cooldown: int = 0
+
+    def heading_vec(self):
+        return np.array([np.cos(self.heading), np.sin(self.heading)])
 
 
 # --- torus geometry (nearest-image everywhere) ---
@@ -67,18 +90,13 @@ class World:
         else:
             s = np.asarray(size, float)
         self.size = s
-        self.head_uw = s / 2.0
-        self.head = wrap(self.head_uw, s)
-        self.heading = float(self.rng.uniform(0, 2 * np.pi))
-        self.path_uw = [self.head_uw.copy()]
-        self.target_length = cfg.start_length
-        self.stamina = cfg.s_max
-        self.energy = cfg.energy_max
-        self.alive = True
-        self.dashed = False
-        self.death_cause = None
-        self.steps = 0
-        self._prev_head_uw = self.head_uw.copy()
+        self.snakes = [Snake(
+            head_uw=s / 2.0, head=wrap(s / 2.0, s), heading=float(self.rng.uniform(0, 2 * np.pi)),
+            path_uw=[(s / 2.0).copy()], target_length=cfg.start_length,
+            stamina=cfg.s_max, energy=cfg.energy_max, _prev_head_uw=(s / 2.0).copy(),
+            id=0, color_seed=0,
+        )]
+        self._next_snake_id = 1
         # chickens / obstacles filled by worldgen; default empty
         self.chicken_pos = np.zeros((0, 2)); self.chicken_dir = np.zeros((0,))
         self.chicken_id = np.zeros((0,), dtype=int)      # stable id per chicken
@@ -86,46 +104,43 @@ class World:
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
 
-    def heading_vec(self):
-        return np.array([np.cos(self.heading), np.sin(self.heading)])
-
-    # --- motion ---
-    def move(self, steering, dash):
+    # --- motion (per-snake workers) ---
+    def _move_snake(self, s, steering, dash):
         c = self.cfg
         if steering == 0:
-            self.heading -= np.radians(c.turn_deg)
+            s.heading -= np.radians(c.turn_deg)
         elif steering == 2:
-            self.heading += np.radians(c.turn_deg)
-        self.heading %= 2 * np.pi
-        dashing = bool(dash) and self.stamina >= c.dash_min_stamina  # reserve gate (curriculum-tunable)
+            s.heading += np.radians(c.turn_deg)
+        s.heading %= 2 * np.pi
+        dashing = bool(dash) and s.stamina >= c.dash_min_stamina  # reserve gate (curriculum-tunable)
         speed = c.v_dash if dashing else c.v_snake
-        prev_uw = self.head_uw.copy()
-        self.head_uw = prev_uw + speed * self.heading_vec()
-        self.head = wrap(self.head_uw, self.size)
-        self.path_uw.append(self.head_uw.copy())
-        self._prune_path()
+        prev_uw = s.head_uw.copy()
+        s.head_uw = prev_uw + speed * s.heading_vec()
+        s.head = wrap(s.head_uw, self.size)
+        s.path_uw.append(s.head_uw.copy())
+        self._prune_path(s)
         if dashing:
-            self.stamina = max(0.0, self.stamina - c.stamina_drain)
+            s.stamina = max(0.0, s.stamina - c.stamina_drain)
         else:
-            self.stamina = min(c.s_max, self.stamina + c.stamina_regen)
-        self.steps += 1
-        self._prev_head_uw = prev_uw
-        self.dashed = dashing
+            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)
+        s.steps += 1
+        s._prev_head_uw = prev_uw
+        s.dashed = dashing
         return dashing
 
-    def _prune_path(self):
-        pts = np.array(self.path_uw)
+    def _prune_path(self, s):
+        pts = np.array(s.path_uw)
         if len(pts) < 3:
             return
         seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
         cum = np.cumsum(seg[::-1])[::-1]              # dist from head to each point's forward neighbor
         # slack = max motion step (v_dash), so body_points_uw never truncates its tail after a dash
-        keep = np.concatenate([cum <= (self.target_length + self.cfg.v_dash), [True]])
-        self.path_uw = [p.copy() for p in pts[keep]]
+        keep = np.concatenate([cum <= (s.target_length + self.cfg.v_dash), [True]])
+        s.path_uw = [p.copy() for p in pts[keep]]
 
-    def body_points_uw(self):
+    def _body_points_uw(self, s):
         c = self.cfg
-        pts = np.array(self.path_uw)
+        pts = np.array(s.path_uw)
         if len(pts) < 2:
             return np.zeros((0, 2))
         # Skip the head-adjacent "neck", then a body point every segment_spacing.
@@ -135,7 +150,7 @@ class World:
         skip = c.head_radius + c.body_radius + c.v_dash + c.segment_spacing
         targets = []
         t = skip
-        while t <= self.target_length:
+        while t <= s.target_length:
             targets.append(t); t += c.segment_spacing
         if not targets:
             return np.zeros((0, 2))
@@ -155,19 +170,19 @@ class World:
                 break
         return np.array(out) if out else np.zeros((0, 2))
 
-    def body_points(self):
-        b = self.body_points_uw()
+    def _body_points(self, s):
+        b = self._body_points_uw(s)
         return wrap(b, self.size) if len(b) else b
 
-    def body_render_path_uw(self, spacing=None):
+    def _body_render_path_uw(self, s, spacing=None):
         """Dense UNWRAPPED body polyline from the head (index 0) back to target_length.
         For rendering only — NO neck skip, so the drawn body connects to the head (no gap)."""
         c = self.cfg
         spacing = spacing if spacing is not None else max(0.25, c.body_radius * 0.5)
-        pts = np.array(self.path_uw)
+        pts = np.array(s.path_uw)
         if len(pts) < 2:
-            return self.head_uw[None].copy()
-        targets = np.arange(0.0, self.target_length + 1e-9, spacing)
+            return s.head_uw[None].copy()
+        targets = np.arange(0.0, s.target_length + 1e-9, spacing)
         out = [pts[-1].copy()]                           # index 0 = head (arc 0)
         ti, acc = 1, 0.0
         for i in range(len(pts) - 1, 0, -1):
@@ -295,25 +310,37 @@ class World:
         self._add_chicken(self._free_point(self.cfg.chicken_radius))
 
     # --- collisions & full step ---
-    def check_death(self):
+    def _check_death(self, s):
         # swept head segment [prev_head -> head]; body_points_uw already skips the neck (see body_points_uw)
-        p0 = self._prev_head_uw
-        p1 = self.head_uw
+        p0 = s._prev_head_uw
+        p1 = s.head_uw
         hr = self.cfg.head_radius
         if len(self.obstacle_pos):
             hit = segment_circle_hit(wrap(p0, self.size), wrap(p1, self.size),
                                      self.obstacle_pos, self.obstacle_r + hr, self.size)
             if hit.any():
-                self.alive = False; self.death_cause = "obstacle"
+                s.alive = False; s.death_cause = "obstacle"
                 return True
-        body = self.body_points_uw()
+        body = self._body_points_uw(s)
         if len(body):
             hit = segment_circle_hit(p0, p1, body,
                                      np.full(len(body), self.cfg.body_radius + hr), self.size)
             if hit.any():
-                self.alive = False; self.death_cause = "self"
+                s.alive = False; s.death_cause = "self"
                 return True
         return False
+
+    # --- ego proxies (temporary Milestone-A bridge; reworked in Milestone B) ---
+    _EGO_ATTRS = ("head_uw", "head", "heading", "target_length", "stamina", "energy",
+                  "alive", "dashed", "death_cause", "steps", "path_uw", "_prev_head_uw")
+
+    def heading_vec(self):            return self.snakes[0].heading_vec()
+    def move(self, steering, dash):   return self._move_snake(self.snakes[0], steering, dash)
+    def check_death(self):            return self._check_death(self.snakes[0])
+    def body_points_uw(self):         return self._body_points_uw(self.snakes[0])
+    def body_points(self):            return self._body_points(self.snakes[0])
+    def body_render_path_uw(self, spacing=None):
+        return self._body_render_path_uw(self.snakes[0], spacing)
 
     def step(self, steering, dash):
         dashed = self.move(steering, dash)
@@ -323,3 +350,10 @@ class World:
         self.maybe_spawn()
         died = self.check_death()
         return {"ate": ate, "died": died, "dashed": dashed}
+
+
+def _ego_prop(name):
+    return property(lambda self: getattr(self.snakes[0], name),
+                    lambda self, v: setattr(self.snakes[0], name, v))
+for _n in World._EGO_ATTRS:
+    setattr(World, _n, _ego_prop(_n))
