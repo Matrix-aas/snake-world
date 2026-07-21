@@ -38,7 +38,7 @@
 
 ---
 
-### Task B1: Per-snake world dynamics + richer step reporting
+### Task 1: Per-snake world dynamics + richer step reporting
 
 Close the ecosystem: every snake eats/grows/starves (so opponents can reach `repro_length_min` and mate, or die); prune dead opponents (persistent world); and surface per-cause deaths + hatches so the viewer can report them.
 
@@ -96,7 +96,7 @@ def test_step_reports_detailed_deaths_and_hatches():
 
 ---
 
-### Task B2: Multi-snake observation (`OBS_DIM 42→75`) + bounds
+### Task 2: Multi-snake observation (`OBS_DIM 42→75`) + bounds
 
 Per-snake egocentric obs (spec §4). **Retrain-critical.** Every signed channel bounded so `check_env` passes `[I-4]`.
 
@@ -120,7 +120,7 @@ Per-snake egocentric obs (spec §4). **Retrain-critical.** Every signed channel 
 
 ---
 
-### Task B3: Self-play env + `OpponentController` + rewards + curriculum
+### Task 3: Self-play env + `OpponentController` + rewards + curriculum
 
 The core RL task. Ego = SB3 learner; opponents stepped in-env from a policy snapshot via the proven 0a preprocessing.
 
@@ -156,7 +156,7 @@ The core RL task. Ego = SB3 learner; opponents stepped in-env from a policy snap
 
 ---
 
-### Task B4: 0b gate — short run confirms mating is discovered
+### Task 4: 0b gate — short run confirms mating is discovered
 
 Verify `+reward_repro` fires under the curriculum BEFORE the 8M retrain (spec §6). A **gate**, not committed code.
 
@@ -169,7 +169,7 @@ Verify `+reward_repro` fires under the curriculum BEFORE the 8M retrain (spec §
 
 ---
 
-### Task B5: Render + persistent viewer + ecosystem metrics (no retrain)
+### Task 5: Render + persistent viewer + ecosystem metrics (no retrain)
 
 **Files:** Modify `snake_rl/render.py`, `snake_rl/watch.py`; Test `tests/test_render_smoke.py`, `tests/test_watch_smoke.py`.
 
@@ -187,7 +187,7 @@ Verify `+reward_repro` fires under the curriculum BEFORE the 8M retrain (spec §
 
 ---
 
-### Task B6: Full retrain, judging, tuning, docs
+### Task 6: Full retrain, judging, tuning, docs
 
 **Files:** `models/` (not committed), `CLAUDE.md`, spec §5 note.
 
