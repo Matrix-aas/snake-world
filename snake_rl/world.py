@@ -106,6 +106,7 @@ class World:
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
         self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int)}
         self._mate_streak = {}
+        self.auto_lay_warmup = False                     # set by env.set_hardness; read by B4's _auto_lay fallback
 
     # --- motion (per-snake workers) ---
     def _move_snake(self, s, steering, dash):
@@ -489,12 +490,14 @@ class World:
 
     def step(self, steering, dash, opponent_fn=None):
         opponent_fn = opponent_fn or (lambda world, s: (1, 0))
-        # phase 1: move ALL live snakes
+        # phase 1: EVERY snake (ego + opponents) acts on the PRE-MOVE world, so collect all opponent
+        # actions BEFORE moving anyone [M-2], then move ego, then move opponents with those actions.
         ego = self.snakes[0]
+        opp_actions = {o.id: opponent_fn(self, o) for o in self.snakes[1:] if o.alive}
         ego_dashed = self._move_snake(ego, steering, dash) if ego.alive else False
         for o in self.snakes[1:]:
             if o.alive:
-                st, da = opponent_fn(self, o)
+                st, da = opp_actions[o.id]
                 self._move_snake(o, st, da)
         # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
         dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]

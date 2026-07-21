@@ -72,6 +72,13 @@ class Config:
     egg_food: float = 25.0           # food value if an egg is eaten instead of hatching
     corpse_food_per_length: float = 4.0  # food value of a dead snake's corpse, per unit length
     egg_radius: float = 1.0          # egg footprint for ray hit-testing (Minkowski +head_radius, Pitfall 8)
+    # mating curriculum (easy warmup values; set_hardness interpolates each toward the hard value above
+    # so reproduction is easy to DISCOVER early, then tightens as hardness ramps to 1.0)
+    r_mate_easy: float = 12.0
+    mate_steps_easy: int = 1
+    repro_length_min_easy: float = 6.0
+    auto_lay_until: float = 0.15     # while hardness < this, flag the world for the auto-lay fallback...
+    auto_lay_warmup_enabled: bool = False  # ...but the fallback is OFF by default (B4 flips it if the gate fails)
     # sensing
     n_rays: int = 9
     fov_deg: float = 270.0           # total arc, centered forward (±135°)

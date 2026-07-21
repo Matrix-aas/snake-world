@@ -71,6 +71,18 @@ class AnnealHardness(BaseCallback):
         return True
 
 
+class SyncOpponentPolicy(BaseCallback):
+    """Self-play: each rollout, snapshot the learner's policy + the VecNormalize stats and push them
+    into every env's OpponentController, so in-env opponents mirror the current ego brain."""
+    def _on_step(self):
+        return True
+
+    def _on_rollout_end(self):
+        sd = {k: v.detach().cpu().numpy() for k, v in self.model.policy.state_dict().items()}
+        vn = self.model.get_vec_normalize_env()
+        self.training_env.env_method("set_opponent_policy", sd, vn.obs_rms, vn.clip_obs, vn.epsilon)
+
+
 class SaveEvery(BaseCallback):
     """Overwrite the fixed model + VecNormalize paths periodically so watch always has a fresh checkpoint."""
     def __init__(self, save_freq_steps, model_path, norm_path, n_envs):
@@ -104,6 +116,7 @@ def train(total_steps, n_envs=16, model_path="models/snake.zip", reset=False, se
                     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, target_kl=0.03,  # target_kl = stability guard
                     policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])))
     callbacks = [EpisodeStatsCallback(log_every),
+                 SyncOpponentPolicy(),          # self-play: opponents mirror the learner each rollout
                  SaveEvery(save_every, model_path, norm_path, n_envs)]
     if not resuming:
         callbacks.append(AnnealHardness(total_steps, CFG.hardness_warmup, CFG.hardness_full))

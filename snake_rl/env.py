@@ -6,6 +6,7 @@ from gymnasium import spaces
 from .config import CFG, assert_invariants
 from .worldgen import generate_world
 from .sensors import observe, OBS_DIM
+from .selfplay import OpponentController
 
 
 def _make_observation_space(cfg):
@@ -50,6 +51,7 @@ class SnakeEnv(gym.Env):
         self._seeded = False
         self._world_size = world_size          # None -> random size per episode; fixed -> e.g. screen-fit
         self._dash_penalty = cfg.dash_penalty if dash_penalty is None else dash_penalty
+        self._opp = OpponentController(cfg)    # drives in-env opponents from a policy snapshot (self-play)
         self.set_hardness(hardness)            # sets self.cfg (stamina gate/regen interpolated easy<->hard)
         self.action_space = spaces.MultiDiscrete([3, 2])
         self.observation_space = _make_observation_space(cfg)
@@ -63,11 +65,18 @@ class SnakeEnv(gym.Env):
         h = float(min(1.0, max(0.0, h)))
         self._hardness = h
         b = self._base_cfg
+        lerp = lambda easy, hard: easy + h * (hard - easy)
         self.cfg = replace(
             b,
-            dash_min_stamina=b.dash_min_stamina_easy + h * (b.dash_min_stamina - b.dash_min_stamina_easy),
-            stamina_regen=b.stamina_regen_easy + h * (b.stamina_regen - b.stamina_regen_easy),
+            dash_min_stamina=lerp(b.dash_min_stamina_easy, b.dash_min_stamina),
+            stamina_regen=lerp(b.stamina_regen_easy, b.stamina_regen),
+            # mating curriculum: easy to discover early (close/instant/short), tightens as h -> 1
+            r_mate=lerp(b.r_mate_easy, b.r_mate),
+            mate_steps=int(round(lerp(b.mate_steps_easy, b.mate_steps))),
+            repro_length_min=lerp(b.repro_length_min_easy, b.repro_length_min),
         )
+        if b.auto_lay_warmup_enabled and getattr(self, "world", None) is not None:
+            self.world.auto_lay_warmup = (h < b.auto_lay_until)
 
     def _phi(self):
         _, d = self.world.nearest_chicken()
@@ -82,10 +91,18 @@ class SnakeEnv(gym.Env):
         super().reset(seed=seed)
         self._seeded = True
         world_seed = int(self.np_random.integers(0, 2 ** 31 - 1))
-        self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size)
+        n = int(self.np_random.integers(self.cfg.n_start_min, self.cfg.n_start_max + 1))   # [C-1] spawn N
+        self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size, n_snakes=n)
+        if self._base_cfg.auto_lay_warmup_enabled:
+            self.world.auto_lay_warmup = (self._hardness < self._base_cfg.auto_lay_until)
+        self._opp.reset_all()                  # [I-1] drop stale opponent frame rings for the new world
         self._last_phi = self._phi()
         self._last_ids = frozenset(int(i) for i in self.world.chicken_id)
         return observe(self.world), {}
+
+    def set_opponent_policy(self, state_dict, obs_rms, clip_obs, epsilon):
+        """[I-5] Push a fresh policy snapshot + VecNormalize stats into the opponent controller."""
+        self._opp.sync(state_dict, obs_rms, clip_obs, epsilon)
 
     def _shaping(self):
         """PBRS: gamma*phi' - phi. Phi = -dist_to_nearest is CONTINUOUS as the nearest identity
@@ -104,10 +121,16 @@ class SnakeEnv(gym.Env):
     def step(self, action):
         c = self.cfg
         steering, dash = int(action[0]), int(action[1])
-        out = self.world.step(steering, dash)
+        ego_id = self.world.snakes[0].id
+        out = self.world.step(steering, dash, opponent_fn=lambda world, s: self._opp.act(world, s))
         terminated = out["died"]
         truncated = self.world.steps >= c.episode_horizon
         reward = c.reward_eat * out["ate"]
+        # [I-2] pay reproduction ONLY for eggs that actually hatched AND that the ego co-owns; a raided
+        # or population-cap-dropped ego egg is absent from hatched_owners, so it pays nothing.
+        reward += c.reward_repro * sum(1 for owners in out["hatched_owners"] if ego_id in owners)
+        for sid, _cause in out["deaths_detailed"]:
+            self._opp.reset_snake(sid)         # clear a dead snake's frame ring (no stale frames)
         if terminated:
             reward += c.reward_death
         else:
