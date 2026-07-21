@@ -58,30 +58,53 @@ def test_walking_chicken_ambles_at_v_wander():
     assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_wander) < 1e-6
 
 
-def test_snake_in_r_flee_triggers_flee_and_startle_burst():
+def test_pecking_chicken_ignores_snake_beyond_r_flee_peck():
+    # Peck-distraction: a head-down pecking chicken does NOT flee a snake inside the WALK alert
+    # range (r_flee) but outside the tight peck range (r_flee_peck) — the stalk-and-pounce window.
     w = World(CFG, seed=3, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
-    w.set_chickens([[30.0 + CFG.r_flee * 0.5, 30.0]])  # inside r_flee, east of the snake
-    w.chicken_state[0] = 0; w.chicken_timer[0] = 50    # was pecking
+    d = 0.5 * (CFG.r_flee_peck + CFG.r_flee)            # between the two ranges
+    w.set_chickens([[30.0 + d, 30.0]])
+    w.chicken_state[0] = 0; w.chicken_timer[0] = 50     # pecking
     before = w.chicken_pos[0].copy()
     w.update_chickens()
-    assert w.chicken_state[0] == 2                      # flipped to FLEE
-    assert w.chicken_pos[0][0] > before[0]              # ran away (+x, away from the snake)
-    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_startle) < 1e-6   # startle flutter
+    assert w.chicken_state[0] == 0                       # still pecking (distracted)
+    assert np.linalg.norm(w.chicken_pos[0] - before) < 1e-9   # didn't move -> catchable
 
 
-def test_startle_burst_then_settles_to_flee_speed():
-    # First chicken_startle_steps flee steps flutter at v_startle, then it settles to v_flee
-    # while the (fixed) snake stays inside r_flee.
+def test_pecking_chicken_startles_when_snake_within_r_flee_peck():
+    # Snake stalks to within r_flee_peck -> the pecking chicken startles: FLEE + a freeze beat.
+    w = World(CFG, seed=3, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.set_chickens([[30.0 + CFG.r_flee_peck * 0.5, 30.0]])   # inside the tight peck range
+    w.chicken_state[0] = 0; w.chicken_timer[0] = 50
+    before = w.chicken_pos[0].copy()
+    w.update_chickens()
+    assert w.chicken_state[0] == 2                       # startled -> FLEE
+    assert np.linalg.norm(w.chicken_pos[0] - before) < 1e-9   # frozen in surprise (speed 0) this step
+
+
+def test_walking_chicken_flees_at_full_r_flee():
+    # A WALKing chicken is alert: it flees at the full r_flee (a stalk only works on a pecking bird).
+    w = World(CFG, seed=3, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.set_chickens([[30.0 + CFG.r_flee * 0.7, 30.0]])   # inside r_flee, far outside r_flee_peck
+    w.chicken_state[0] = 1; w.chicken_timer[0] = 50     # walking
+    w.update_chickens()
+    assert w.chicken_state[0] == 2                       # WALK chicken flees at the full r_flee
+
+
+def test_startle_freeze_then_bolts_at_v_flee():
+    # Entering flee: FREEZE (speed 0) for chicken_startle_steps, THEN bolt away at v_flee.
     w = World(CFG, seed=4, size=(120, 120))
     w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
-    w.set_chickens([[42.0, 40.0]])                     # 2 units east -> flees east, stays in r_flee for a while
-    w.chicken_state[0] = 1; w.chicken_timer[0] = 50    # was walking
+    w.set_chickens([[42.0, 40.0]])                      # inside r_flee_peck AND r_flee
+    w.chicken_state[0] = 0; w.chicken_timer[0] = 50     # pecking -> startles
     for step in range(CFG.chicken_startle_steps + 1):
         before = w.chicken_pos[0].copy()
         w.update_chickens()
         disp = np.linalg.norm(w.chicken_pos[0] - before)
-        expected = CFG.v_startle if step < CFG.chicken_startle_steps else CFG.v_flee
+        expected = 0.0 if step < CFG.chicken_startle_steps else CFG.v_flee   # freeze, then bolt
         assert abs(disp - expected) < 1e-6
 
 
@@ -89,13 +112,13 @@ def test_flee_settles_to_walk_when_snake_leaves():
     # Threat gone -> resume WALK (not straight back to pecking under the snake's nose).
     w = World(CFG, seed=5, size=(120, 120))
     w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
-    w.set_chickens([[46.0, 40.0]])                     # inside r_flee -> flee
-    w.chicken_state[0] = 0; w.chicken_timer[0] = 50
+    w.set_chickens([[46.0, 40.0]])                      # inside r_flee of a WALKing chicken -> flee
+    w.chicken_state[0] = 1; w.chicken_timer[0] = 50     # walking (alert at the full r_flee)
     w.update_chickens()
-    assert w.chicken_state[0] == 2                      # fleeing
+    assert w.chicken_state[0] == 2                       # fleeing
     w.head = np.array([100.0, 100.0]); w.head_uw = w.head.copy()   # snake leaves (well beyond r_flee)
     w.update_chickens()
-    assert w.chicken_state[0] == 1                      # settled to WALK
+    assert w.chicken_state[0] == 1                       # settled to WALK
 
 
 def test_fsm_arrays_stay_consistent_after_eat():

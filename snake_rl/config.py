@@ -23,15 +23,16 @@ class Config:
     # chickens
     v_wander: float = 0.25
     v_flee: float = 1.15
-    r_flee: float = 12.0             # chickens bolt at this distance; catching a runner needs a dash burst
-    # behavior FSM (peck/walk/flee): a chicken pecks in place (prime catch window), ambles, then
-    # bolts on threat with a brief startle flutter. Durations in steps (staggered by rng at spawn).
+    r_flee: float = 12.0             # WALK alert distance; catching a runner needs a dash burst
+    r_flee_peck: float = 2.5         # a head-down PECKING chicken is distracted: only startles when a
+                                     # snake is THIS close (< r_flee) -> the stalk-and-pounce catch window
+    # behavior FSM (peck/walk/flee): a chicken pecks in place (prime catch window), ambles, then on
+    # threat freezes in surprise for a beat and bolts. Durations in steps (staggered by rng at spawn).
     chicken_peck_min: int = 12
     chicken_peck_max: int = 35
     chicken_walk_min: int = 18
     chicken_walk_max: int = 45
-    chicken_startle_steps: int = 4   # first flee steps flutter faster (startle / "fly up")
-    v_startle: float = 1.6           # flutter speed; invariant keeps v_dash > v_startle so a dash still catches
+    chicken_startle_steps: int = 4   # entering flee: FREEZE (speed 0) for this many steps, then bolt at v_flee
     chicken_radius: float = 1.0
     max_chickens: int = 5
     min_chickens: int = 3            # keep the world populated (fast refill below this)
@@ -110,9 +111,10 @@ class Config:
 
 
 def assert_invariants(cfg: Config) -> None:
-    # (1) dash beats flee (and the brief startle flutter) — a dash always closes on any chicken speed
+    # (1) dash beats flee — a dash always closes on a bolting chicken
     assert cfg.v_dash > cfg.v_flee, "v_dash must exceed v_flee"
-    assert cfg.v_dash > cfg.v_startle, "v_dash must exceed v_startle so a dash still catches a startled chicken"
+    # a pecking chicken is distracted: its startle range must be tighter than the walking alert range
+    assert cfg.r_flee_peck < cfg.r_flee, "r_flee_peck must be smaller than r_flee (peck = distracted)"
     # (2) stamina budget closes the flee radius with slack
     budget = (cfg.s_max / cfg.stamina_drain) * (cfg.v_dash - cfg.v_flee)
     assert budget >= cfg.catch_slack_k * cfg.r_flee, "stamina budget too small for guaranteed catch"

@@ -293,16 +293,19 @@ class World:
         Mutates chicken_state/timer/startle in place. Flee overrides the peck/walk timer; when no
         snake is near a fleeing chicken it settles to WALK (not straight back to pecking under a nose)."""
         c = self.cfg
-        # --- threat: flee the repulsion resultant of every snake within r_flee (never bolt from one
-        #     snake straight into another; opposing snakes that cancel -> flee the single nearest). ---
+        # --- threat: flee the repulsion resultant of every snake within the alert radius (never bolt
+        #     from one snake straight into another; opposing snakes that cancel -> flee the nearest).
+        #     A head-down PECKING chicken is distracted: it only notices a snake within the tight
+        #     r_flee_peck (the stalk-and-pounce window). WALK / already-fleeing use the full r_flee. ---
+        alert = c.r_flee_peck if self.chicken_state[i] == 0 else c.r_flee
         if len(heads):
             to_heads = torus_delta(heads, self.chicken_pos[i], self.size)   # (K,2) chicken->each head
             dist = np.linalg.norm(to_heads, axis=1)
-            near = (dist < c.r_flee) & (dist > 1e-6)
+            near = (dist < alert) & (dist > 1e-6)
         else:
             near = np.zeros(0, bool)
         if near.any():
-            if self.chicken_state[i] != 2:                                  # startle burst on ENTERING flee
+            if self.chicken_state[i] != 2:                                  # startle-FREEZE on ENTERING flee
                 self.chicken_state[i] = 2
                 self.chicken_startle[i] = c.chicken_startle_steps
             weight = c.r_flee - dist[near]                                  # linear falloff, ->0 at r_flee
@@ -315,8 +318,8 @@ class World:
                 base = np.arctan2(-to_heads[j][1], -to_heads[j][0])
             if self.chicken_startle[i] > 0:
                 self.chicken_startle[i] -= 1
-                return base, c.v_startle                                    # flutter/fly-up
-            return base, c.v_flee
+                return base, 0.0                                            # startle FREEZE: a beat of surprise
+            return base, c.v_flee                                          # then bolt away
 
         # --- safe: a chicken that WAS fleeing resumes wandering (settles to peck later, via timer) ---
         if self.chicken_state[i] == 2:

@@ -178,22 +178,26 @@ def test_chicken_flees_nearest_live_snake_opponent_only():
     opp = _mk_snake([100.0, 100.0], sid=1)
     w.snakes.append(opp)
     w.set_chickens([[100.0 + CFG.r_flee * 0.5, 100.0]])          # within r_flee of the opponent only
+    w.chicken_state[0] = 1                                        # WALK: alert at the full r_flee (not distracted)
     before = np.linalg.norm(w.chicken_pos[0] - opp.head)
-    w.update_chickens()
+    for _ in range(CFG.chicken_startle_steps + 1):               # step past the startle FREEZE, then it bolts
+        w.update_chickens()
     after = np.linalg.norm(w.chicken_pos[0] - opp.head)
     assert after > before                                          # fled the opponent, not just wandered
 
 
 def test_chicken_flees_lone_ego_snake_n1_invariant():
-    # N=1: a lone (ego) snake still makes a chicken flee directly away. The unified FSM enters flee
-    # with a startle flutter, so the FIRST step moves at v_startle (not v_flee) — direction unchanged.
+    # N=1: a lone (ego) snake still makes a WALKing chicken flee directly away. Entering flee it
+    # freezes for the startle beat, so net motion after startle+1 steps is one v_flee bolt (+x).
     w = World(CFG, seed=1, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
     w.set_chickens([[30.0 + CFG.r_flee * 0.5, 30.0]])
+    w.chicken_state[0] = 1                                        # WALK: alert at the full r_flee
     before = w.chicken_pos[0].copy()
-    w.update_chickens()
+    for _ in range(CFG.chicken_startle_steps + 1):               # startle FREEZE (no move), then one bolt
+        w.update_chickens()
     assert w.chicken_pos[0][0] > before[0]
-    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_startle) < 1e-6
+    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_flee) < 1e-6
 
 
 def test_chicken_flee_resultant_avoids_both_flanking_snakes():
@@ -210,9 +214,11 @@ def test_chicken_flee_resultant_avoids_both_flanking_snakes():
     opp = _mk_snake(chick + 7.0 * np.array([np.cos(theta), np.sin(theta)]), sid=1)
     w.snakes.append(opp)
     w.set_chickens([chick])
+    w.chicken_state[0] = 1                                        # WALK: alert at the full r_flee
     d_ego_before = np.linalg.norm(chick - ego.head)
     d_opp_before = np.linalg.norm(chick - opp.head)
-    w.update_chickens()
+    for _ in range(CFG.chicken_startle_steps + 1):               # step past the startle FREEZE, then it bolts
+        w.update_chickens()
     d_ego_after = np.linalg.norm(w.chicken_pos[0] - ego.head)
     d_opp_after = np.linalg.norm(w.chicken_pos[0] - opp.head)
     assert d_ego_after > d_ego_before                # moved away from A too...
@@ -228,7 +234,9 @@ def test_chicken_flee_degenerate_cancellation_falls_back_to_nearest():
     opp = _mk_snake(chick + [-8.0, 0.0], sid=1)                                            # due west
     w.snakes.append(opp)
     w.set_chickens([chick])
-    w.update_chickens()
+    w.chicken_state[0] = 1                                        # WALK: alert at the full r_flee
+    for _ in range(CFG.chicken_startle_steps + 1):               # step past the startle FREEZE, then it bolts
+        w.update_chickens()
     new_chick = w.chicken_pos[0]
     assert np.isfinite(new_chick).all()
     assert new_chick[0] < chick[0]                   # fled west, away from the (tie-break) nearest = ego (east)
@@ -246,9 +254,11 @@ def test_chicken_flees_live_opponent_when_ego_is_dead():
     opp = _mk_snake([100.0, 100.0], sid=1)
     w.snakes.append(opp)
     w.set_chickens([[106.0, 100.0]])                                 # within r_flee of the LIVE opponent only
+    w.chicken_state[0] = 1                                           # WALK: alert at the full r_flee
     w.chicken_dir[0] = np.pi                                         # points AT the opponent if wander ever fires
     before = np.linalg.norm(w.chicken_pos[0] - opp.head)
-    w.update_chickens()
+    for _ in range(CFG.chicken_startle_steps + 1):                  # step past the startle FREEZE, then it bolts
+        w.update_chickens()
     after = np.linalg.norm(w.chicken_pos[0] - opp.head)
     assert after > before        # fled the live opponent, not the dead ego ghost at (10, 10)
 
