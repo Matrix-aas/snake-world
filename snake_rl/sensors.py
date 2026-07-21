@@ -36,8 +36,9 @@ def _scan(world, head, heading):
     with kind 0=obstacle,1=chicken,2=self,-1=none. Same result as a per-ray loop, faster."""
     c = world.cfg
     cen, rad, kind = _all_targets(world)
-    dirs = ray_dirs(c, heading)                          # (R,2)
-    dist = np.full(c.n_rays, c.ray_range, float)
+    rad = rad + c.head_radius                            # inflate by head radius (Minkowski): rays report
+    dirs = ray_dirs(c, heading)                          # distance until the head EDGE touches -> the snake
+    dist = np.full(c.n_rays, c.ray_range, float)         # perceives its own width, not just a center point
     kinds = np.full(c.n_rays, -1, int)
     if len(cen):
         m = torus_delta(cen, head, world.size)           # (K,2) head->center (nearest image)

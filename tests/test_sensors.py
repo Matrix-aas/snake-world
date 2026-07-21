@@ -24,7 +24,8 @@ def test_center_ray_sees_obstacle_ahead():
     v = sense_vision(w)
     center = v[CFG.n_rays // 2]
     assert center[1] == 1.0                       # obstacle channel
-    assert abs(center[0] - (40 - 1 - 30) / CFG.ray_range) < 1e-2
+    # distance until the head EDGE touches: 40 - (obstacle_r + head_radius) - 30, normalized
+    assert abs(center[0] - (40 - 1 - CFG.head_radius - 30) / CFG.ray_range) < 1e-2
 
 
 def test_empty_ray_encoding():
