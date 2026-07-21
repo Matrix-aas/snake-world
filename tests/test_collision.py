@@ -65,3 +65,41 @@ def test_self_collision_when_curled():
     w.head_uw = w.path_uw[-1].copy(); w.head = wrap(w.head_uw, w.size)
     w._prev_head_uw = w.path_uw[-2].copy()
     assert w.check_death()               # head overlaps a body point ~one circumference back
+
+
+def test_head_into_other_body_kills_mover():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.world import World, Snake, wrap
+    w = World(CFG, seed=3, size=(80.0, 80.0))
+    victim = w.snakes[0]                                   # long, lying along +x at y=40
+    victim.head_uw = np.array([50.0, 40.0]); victim.heading = 0.0
+    victim.path_uw = [np.array([40.0, 40.0]), np.array([50.0, 40.0])]
+    victim.target_length = 12.0; victim._prev_head_uw = np.array([49.0, 40.0])
+    victim.head = wrap(victim.head_uw, w.size)
+    attacker = Snake(head_uw=np.array([45.0, 43.0]), head=wrap(np.array([45.0,43.0]), w.size),
+                     heading=-np.pi/2, path_uw=[np.array([45.0,46.0]), np.array([45.0,43.0])],
+                     target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
+                     _prev_head_uw=np.array([45.0, 46.0]), id=1)
+    w.snakes.append(attacker)
+    # attacker's swept head crosses the victim's body line (y=40): set it explicitly, then check.
+    attacker._prev_head_uw = np.array([45.0, 41.0]); attacker.head_uw = np.array([45.0, 39.0])
+    attacker.head = wrap(attacker.head_uw, w.size)
+    assert w._check_death(attacker) is True and attacker.death_cause == "snake"
+    assert victim.alive is True
+
+
+def test_mutual_head_to_head_both_die():
+    import numpy as np
+    from snake_rl.config import CFG
+    from snake_rl.world import World, Snake, wrap
+    w = World(CFG, seed=4, size=(80.0, 80.0))
+    a = w.snakes[0]
+    a._prev_head_uw = np.array([39.0, 40.0]); a.head_uw = np.array([41.0, 40.0]); a.heading = 0.0
+    a.head = wrap(a.head_uw, w.size); a.path_uw = [a._prev_head_uw.copy(), a.head_uw.copy()]
+    b = Snake(head_uw=np.array([41.0, 40.0]), head=wrap(np.array([41.0,40.0]), w.size), heading=np.pi,
+              path_uw=[np.array([43.0,40.0]), np.array([41.0,40.0])], target_length=CFG.start_length,
+              stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0,40.0]), id=1)
+    w.snakes.append(b)
+    dead = [s.id for s in w.snakes if w._death_cause(s)]    # pure decider — matches step's phase-2 (C2)
+    assert set(dead) == {0, 1}                              # both heads overlap post-move; neither hides the other

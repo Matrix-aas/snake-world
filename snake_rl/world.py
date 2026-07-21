@@ -324,7 +324,7 @@ class World:
         return np.array(pts), np.array(rads)
 
     def _death_cause(self, s):
-        """Pure — returns 'obstacle'|'self'|None (Task 4 adds 'snake') for s vs post-move state. No mutation."""
+        """Pure — returns 'obstacle'|'self'|'snake'|None for s vs post-move state. No mutation."""
         c = self.cfg; hr = c.head_radius
         p0, p1 = s._prev_head_uw, s.head_uw
         if len(self.obstacle_pos) and segment_circle_hit(
@@ -335,6 +335,10 @@ class World:
         if len(body) and segment_circle_hit(
                 p0, p1, body, np.full(len(body), c.body_radius + hr), self.size).any():
             return "self"
+        opts, orads = self._other_hazard(s)
+        if len(opts) and segment_circle_hit(
+                s._prev_head_uw, s.head_uw, opts, orads + hr, self.size).any():
+            return "snake"
         return None
 
     def _check_death(self, s):                         # wrapper: decide + apply (single-snake / proxy use)
