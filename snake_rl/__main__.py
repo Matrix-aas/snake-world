@@ -7,17 +7,15 @@ def main():
     p = argparse.ArgumentParser(prog="snake_rl")
     sub = p.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("train")
-    t.add_argument("--steps", type=int, default=2_000_000)
-    t.add_argument("--envs", type=int, default=8)
+    t.add_argument("--steps", type=int, default=6_000_000)
+    t.add_argument("--envs", type=int, default=16)
     t.add_argument("--model", default="models/snake.zip")
     t.add_argument("--reset", action="store_true")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--save-every", type=int, default=50_000)
     t.add_argument("--log-every", type=int, default=10_000)
     t.add_argument("--dash-penalty", type=float, default=None,
-                   help="override reward penalty per dash step")
-    t.add_argument("--easy-stamina", action="store_true",
-                   help="curriculum phase 1: cheap always-available dash to learn hunting first")
+                   help="override reward penalty per dash step (default 0: stamina is rationed mechanically)")
     w = sub.add_parser("watch")
     w.add_argument("--model", default="models/snake.zip")
     w.add_argument("--seed", type=int, default=None)
@@ -27,8 +25,7 @@ def main():
     w.add_argument("--episodes", type=int, default=5)
     a = p.parse_args()
     if a.cmd == "train":
-        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every,
-              a.dash_penalty, a.easy_stamina)
+        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every, a.dash_penalty)
     elif a.headless:
         run_headless(a.model, a.seed, a.episodes)
     else:

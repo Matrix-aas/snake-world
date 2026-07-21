@@ -24,8 +24,15 @@ class Config:
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
+    # HARD (final) stamina: dash needs a full-unit reserve, refills slowly -> deliberate bursts
     stamina_regen: float = 0.3       # refills the reserve in ~100 steps: fast enough to hunt, slow enough to matter
     dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
+    # EASY (warmup) stamina: cheap, always-available dash so the agent can first LEARN to hunt
+    stamina_regen_easy: float = 0.6
+    dash_min_stamina_easy: float = 0.05
+    # curriculum: keep easy for the first `hardness_warmup` of training, ramp to full-hard by `hardness_full`
+    hardness_warmup: float = 0.35
+    hardness_full: float = 0.85
     # geometry
     head_radius: float = 1.0
     body_radius: float = 0.5

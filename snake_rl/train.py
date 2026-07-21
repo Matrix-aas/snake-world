@@ -15,16 +15,16 @@ def _linear_lr(initial):
     return f
 
 
-def make_env(rank, seed, world_size=None, dash_penalty=None, easy_stamina=False):
+def make_env(rank, seed, world_size=None, dash_penalty=None, hardness=1.0):
     def _thunk():
         return Monitor(SnakeEnv(seed=seed + rank, world_size=world_size,
-                                dash_penalty=dash_penalty, easy_stamina=easy_stamina))
+                                dash_penalty=dash_penalty, hardness=hardness))
     return _thunk
 
 
-def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None, dash_penalty=None, easy_stamina=False):
+def build_vec(n_envs, seed, training=True, norm_path=None, world_size=None, dash_penalty=None, hardness=1.0):
     cls = DummyVecEnv if n_envs == 1 else SubprocVecEnv
-    vec = cls([make_env(i, seed, world_size, dash_penalty, easy_stamina) for i in range(n_envs)])
+    vec = cls([make_env(i, seed, world_size, dash_penalty, hardness) for i in range(n_envs)])
     vec = VecFrameStack(vec, CFG.frame_stack)
     if norm_path and os.path.exists(norm_path):
         vec = VecNormalize.load(norm_path, vec)
@@ -54,6 +54,30 @@ class EpisodeStatsCallback(BaseCallback):
         return True
 
 
+class AnnealHardness(BaseCallback):
+    """Curriculum: keep stamina easy for `warmup` of training (learn to hunt), then ramp the real
+    reserve mechanic in linearly by `full`. Smooth annealing avoids the survive-only collapse an
+    abrupt easy->hard switch causes."""
+    def __init__(self, total_steps, warmup, full, every=16384):
+        super().__init__()
+        self.total = total_steps; self.warmup = warmup; self.full = full; self.every = every; self._last = -1
+
+    def _hardness(self, p):
+        if p <= self.warmup:
+            return 0.0
+        if p >= self.full:
+            return 1.0
+        return (p - self.warmup) / (self.full - self.warmup)
+
+    def _on_step(self):
+        if self._last < 0 or self.num_timesteps - self._last >= self.every:
+            self._last = self.num_timesteps
+            h = self._hardness(self.num_timesteps / max(1, self.total))
+            self.training_env.env_method("set_hardness", h)
+            self.logger.record("snake/hardness", h)
+        return True
+
+
 class SaveEvery(BaseCallback):
     """Overwrite the fixed model + VecNormalize paths periodically so watch always has a fresh checkpoint."""
     def __init__(self, save_freq_steps, model_path, norm_path, n_envs):
@@ -68,13 +92,15 @@ class SaveEvery(BaseCallback):
         return True
 
 
-def train(total_steps, n_envs=8, model_path="models/snake.zip", reset=False, seed=0,
-          save_every=50000, log_every=10000, dash_penalty=None, easy_stamina=False):
+def train(total_steps, n_envs=16, model_path="models/snake.zip", reset=False, seed=0,
+          save_every=50000, log_every=10000, dash_penalty=None):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
     norm_path = os.path.join(os.path.dirname(model_path) or ".", "vecnormalize.pkl")
     resuming = (not reset) and os.path.exists(model_path)
+    # fresh run starts easy (hardness 0) and anneals the reserve mechanic in; a resume is assumed post-curriculum
+    hardness0 = 1.0 if resuming else 0.0
     vec = build_vec(n_envs, seed, training=True, norm_path=None if reset else norm_path,
-                    dash_penalty=dash_penalty, easy_stamina=easy_stamina)
+                    dash_penalty=dash_penalty, hardness=hardness0)
     if resuming:
         model = PPO.load(model_path, env=vec, device="cpu")
     else:
@@ -86,6 +112,8 @@ def train(total_steps, n_envs=8, model_path="models/snake.zip", reset=False, see
                     policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])))
     callbacks = [EpisodeStatsCallback(log_every),
                  SaveEvery(save_every, model_path, norm_path, n_envs)]
+    if not resuming:
+        callbacks.append(AnnealHardness(total_steps, CFG.hardness_warmup, CFG.hardness_full))
     try:
         model.learn(total_timesteps=total_steps, callback=callbacks,
                     reset_num_timesteps=not resuming)
