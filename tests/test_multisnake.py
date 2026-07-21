@@ -56,7 +56,7 @@ def test_two_phase_step_is_order_independent_head_to_head():
               heading=np.pi, path_uw=[np.array([43.0,40.0])], target_length=CFG.start_length,
               stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0,40.0]), id=1)
     w.snakes.append(b)
-    # will be lethal once Task 4 wires _other_hazard; here assert the step runs both moves first
+    # Precondition for order-independence: both snakes complete their phase-1 move before any death is resolved.
     out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
     assert w.snakes[0].steps == 1 and w.snakes[1].steps == 1   # BOTH moved (phase 1) before any resolve
 

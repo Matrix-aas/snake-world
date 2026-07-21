@@ -6,6 +6,8 @@ and dies on collision with rocks/trees or itself. Trained headless (SB3 PPO, CPU
 in a fullscreen pygame viewer. **The behavior is meant to look alive** — stalk, deliberate
 pounce, avoid clutter — not to be optimal.
 
+> **⚠️ Multi-snake WIP (branch `multi-snake`, Milestone A complete).** The simulation (`world.py`/`worldgen.py`/`config.py`) now supports N snakes — inter-snake cut-off death, corpses, egg-based reproduction, starvation, and population-scaled food — and the world was rescaled (`world_size` 60/100 → 110/160, food now ~2 chickens per live snake, a new `starve` death cause). **`env.py`/`sensors.py` still run single-snake, so the shipped `models/` snake is now a PLACEHOLDER:** it was trained on the old 60/100 world with 3–5 chickens, so its live behavior and the judging band below no longer describe this world until the Milestone B multi-snake retrain. Design + step plan: `docs/superpowers/specs/2026-07-21-multi-snake-world-design.md` and `docs/superpowers/plans/2026-07-21-multi-snake-milestone-a-simulation.md`.
+
 > **This file is the living memory of the project. Keep it current.** When you change the
 > reward, the observation, the physics, the training recipe, or the hyperparameters — update
 > the relevant section here *in the same change*, especially the **Pitfalls** and

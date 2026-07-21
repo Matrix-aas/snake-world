@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import numpy as np
 
 
-@dataclass
+@dataclass(eq=False)
 class Snake:
     head_uw: np.ndarray
     head: np.ndarray
@@ -479,7 +479,7 @@ class World:
             s.alive = False; s.death_cause = cause
             self._spawn_corpse(s)
         deaths = [s.id for s, _ in dying]
-        # phase 3: world updates (chickens/eat/energy/spawn) — ego-centric for now
+        # phase 3: chickens, eat, energy decay, starvation, spawn, mating, hatching (ego-centric eat/decay for now)
         self.update_chickens()
         ate = self.try_eat()
         self.decay_energy()
