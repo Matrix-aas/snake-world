@@ -100,6 +100,12 @@ class World:
         # chickens / obstacles filled by worldgen; default empty
         self.chicken_pos = np.zeros((0, 2)); self.chicken_dir = np.zeros((0,))
         self.chicken_id = np.zeros((0,), dtype=int)      # stable id per chicken
+        # behavior FSM, parallel to chicken_pos: state 0=peck 1=walk 2=flee, timer = steps left
+        # in the current peck/walk, startle = flee steps still fluttering fast. Kept the SAME length
+        # as chicken_pos everywhere (created in _add_chicken/set_chickens, filtered in _snake_eat).
+        self.chicken_state = np.zeros((0,), dtype=int)
+        self.chicken_timer = np.zeros((0,), dtype=int)
+        self.chicken_startle = np.zeros((0,), dtype=int)
         self._next_chicken_id = 0
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
@@ -216,19 +222,37 @@ class World:
         i, _ = self.nearest_chicken()
         return -1 if i < 0 else int(self.chicken_id[i])
 
+    def _random_state_timer(self):
+        """Fresh chicken starts pecking or wandering with a staggered random timer (rng, reproducible)."""
+        c = self.cfg
+        if self.rng.random() < 0.5:
+            return 0, int(self.rng.integers(c.chicken_peck_min, c.chicken_peck_max + 1))
+        return 1, int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
+
     def _add_chicken(self, p):
         self.chicken_pos = np.vstack([self.chicken_pos, p]) if len(self.chicken_pos) else p[None]
         self.chicken_dir = np.append(self.chicken_dir, self.rng.uniform(0, 2 * np.pi))
         self.chicken_id = np.append(self.chicken_id, self._next_chicken_id)
+        st, tm = self._random_state_timer()
+        self.chicken_state = np.append(self.chicken_state, st)
+        self.chicken_timer = np.append(self.chicken_timer, tm)
+        self.chicken_startle = np.append(self.chicken_startle, 0)
         self._next_chicken_id += 1
 
     def set_chickens(self, positions):
         """Place chickens at explicit positions with fresh stable ids (setup/debug helper)."""
         positions = np.asarray(positions, float).reshape(-1, 2)
+        n = len(positions)
         self.chicken_pos = positions.copy()
-        self.chicken_dir = np.zeros(len(positions))
-        self.chicken_id = np.arange(self._next_chicken_id, self._next_chicken_id + len(positions))
-        self._next_chicken_id += len(positions)
+        self.chicken_dir = np.zeros(n)
+        self.chicken_id = np.arange(self._next_chicken_id, self._next_chicken_id + n)
+        sts = np.zeros(n, int); tms = np.zeros(n, int)
+        for k in range(n):
+            sts[k], tms[k] = self._random_state_timer()
+        self.chicken_state = sts
+        self.chicken_timer = tms
+        self.chicken_startle = np.zeros(n, int)
+        self._next_chicken_id += n
 
     def _blocked(self, old, new):
         """True if `new` moves deeper into an obstacle than `old` (so tangential/outward moves pass)."""
@@ -241,7 +265,7 @@ class World:
         return nc < oc
 
     def update_chickens(self):
-        c = self.cfg
+        """Advance each chicken's peck/walk/flee FSM one step (see _chicken_step)."""
         if len(self.chicken_pos) == 0:
             return
 
@@ -255,49 +279,63 @@ class World:
                     self.chicken_dir[i] = a                             # keep heading consistent for wander
                     break
 
-        live_heads = [s.head for s in self.snakes if s.alive]
-        if len(live_heads) <= 1:
-            # 0 or 1 live snake: EXACT legacy formula, untouched — required so a lone/ego snake
-            # (tests/test_chickens.py) flees byte-for-byte as before the multi-snake fix below.
-            # Must use the actual live head, NOT self.head: the ego proxy is kept in snakes[0]
-            # even when dead (_prune_dead), so self.head alone would flee a frozen dead-ego
-            # ghost when the sole survivor is an opponent. live_heads[0] == self.head bit-for-bit
-            # whenever the ego IS that survivor, so tests/test_chickens.py is unaffected.
-            head = live_heads[0] if live_heads else self.head
-            to_head = torus_delta(head, self.chicken_pos, self.size)        # chicken->head
-            dist = np.linalg.norm(to_head, axis=1)
-            for i in range(len(self.chicken_pos)):
-                if dist[i] < c.r_flee and dist[i] > 1e-6:
-                    base = np.arctan2(-to_head[i][1], -to_head[i][0])       # away from snake
-                    speed = c.v_flee
-                else:
-                    self.chicken_dir[i] += self.rng.normal(0, 0.3)          # slow wander drift
-                    base = self.chicken_dir[i]; speed = c.v_wander
-                steer(i, base, speed)
-            return
-
-        # >=2 live snakes: flee the RESULTANT of every snake within r_flee, not just the nearest
-        # one — a chicken must never bolt from one snake straight into another.
-        heads = np.array(live_heads)                                        # (K,2)
+        # Live heads only (the ego proxy is kept in snakes[0] even when dead, so filter on .alive):
+        # a chicken must flee the actual LIVE snake, never a frozen dead-ego ghost.
+        heads = np.array([s.head for s in self.snakes if s.alive]) if any(
+            s.alive for s in self.snakes) else np.zeros((0, 2))
         for i in range(len(self.chicken_pos)):
+            base, speed = self._chicken_step(i, heads)
+            if speed > 0.0:
+                steer(i, base, speed)                                   # peck (speed 0) just stands still
+
+    def _chicken_step(self, i, heads):
+        """FSM transition for chicken i against live snake `heads`; returns (heading, speed).
+        Mutates chicken_state/timer/startle in place. Flee overrides the peck/walk timer; when no
+        snake is near a fleeing chicken it settles to WALK (not straight back to pecking under a nose)."""
+        c = self.cfg
+        # --- threat: flee the repulsion resultant of every snake within r_flee (never bolt from one
+        #     snake straight into another; opposing snakes that cancel -> flee the single nearest). ---
+        if len(heads):
             to_heads = torus_delta(heads, self.chicken_pos[i], self.size)   # (K,2) chicken->each head
             dist = np.linalg.norm(to_heads, axis=1)
             near = (dist < c.r_flee) & (dist > 1e-6)
-            if near.any():
-                weight = c.r_flee - dist[near]                              # linear falloff, ->0 at r_flee
-                away = -to_heads[near] / dist[near, None]                   # unit vectors away from each near head
-                repulsion = (weight[:, None] * away).sum(axis=0)
-                rmag = np.linalg.norm(repulsion)
-                if rmag > 1e-6:
-                    base = np.arctan2(repulsion[1], repulsion[0])
-                else:                                                       # opposing snakes cancel out ->
-                    j = int(np.argmin(np.where(near, dist, np.inf)))        # flee the nearest NEAR one instead
-                    base = np.arctan2(-to_heads[j][1], -to_heads[j][0])
-                speed = c.v_flee
-            else:
-                self.chicken_dir[i] += self.rng.normal(0, 0.3)              # slow wander drift
-                base = self.chicken_dir[i]; speed = c.v_wander
-            steer(i, base, speed)
+        else:
+            near = np.zeros(0, bool)
+        if near.any():
+            if self.chicken_state[i] != 2:                                  # startle burst on ENTERING flee
+                self.chicken_state[i] = 2
+                self.chicken_startle[i] = c.chicken_startle_steps
+            weight = c.r_flee - dist[near]                                  # linear falloff, ->0 at r_flee
+            away = -to_heads[near] / dist[near, None]
+            repulsion = (weight[:, None] * away).sum(axis=0)
+            if np.linalg.norm(repulsion) > 1e-6:
+                base = np.arctan2(repulsion[1], repulsion[0])
+            else:                                                          # degenerate cancellation ->
+                j = int(np.argmin(np.where(near, dist, np.inf)))           # flee the nearest NEAR snake
+                base = np.arctan2(-to_heads[j][1], -to_heads[j][0])
+            if self.chicken_startle[i] > 0:
+                self.chicken_startle[i] -= 1
+                return base, c.v_startle                                    # flutter/fly-up
+            return base, c.v_flee
+
+        # --- safe: a chicken that WAS fleeing resumes wandering (settles to peck later, via timer) ---
+        if self.chicken_state[i] == 2:
+            self.chicken_state[i] = 1
+            self.chicken_timer[i] = int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
+            self.chicken_startle[i] = 0
+        # --- peck <-> walk on the timer ---
+        self.chicken_timer[i] -= 1
+        if self.chicken_timer[i] <= 0:
+            if self.chicken_state[i] == 0:                                  # peck -> walk
+                self.chicken_state[i] = 1
+                self.chicken_timer[i] = int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
+            else:                                                          # walk -> peck
+                self.chicken_state[i] = 0
+                self.chicken_timer[i] = int(self.rng.integers(c.chicken_peck_min, c.chicken_peck_max + 1))
+        if self.chicken_state[i] == 0:                                      # PECK: prime catch window, no move
+            return self.chicken_dir[i], 0.0
+        self.chicken_dir[i] += self.rng.normal(0, 0.3)                      # WALK: gentle wander drift
+        return self.chicken_dir[i], c.v_wander
 
     def _spawn_corpse(self, s):
         food = self.cfg.corpse_food_per_length * s.target_length
@@ -319,6 +357,9 @@ class World:
                 self.chicken_pos = self.chicken_pos[keep]
                 self.chicken_dir = self.chicken_dir[keep]
                 self.chicken_id = self.chicken_id[keep]
+                self.chicken_state = self.chicken_state[keep]     # keep FSM arrays in lock-step
+                self.chicken_timer = self.chicken_timer[keep]
+                self.chicken_startle = self.chicken_startle[keep]
                 n += nc
                 energy_gain += nc * self.cfg.energy_refill
         if len(self.corpses["pos"]):

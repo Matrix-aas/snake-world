@@ -24,6 +24,14 @@ class Config:
     v_wander: float = 0.25
     v_flee: float = 1.15
     r_flee: float = 12.0             # chickens bolt at this distance; catching a runner needs a dash burst
+    # behavior FSM (peck/walk/flee): a chicken pecks in place (prime catch window), ambles, then
+    # bolts on threat with a brief startle flutter. Durations in steps (staggered by rng at spawn).
+    chicken_peck_min: int = 12
+    chicken_peck_max: int = 35
+    chicken_walk_min: int = 18
+    chicken_walk_max: int = 45
+    chicken_startle_steps: int = 4   # first flee steps flutter faster (startle / "fly up")
+    v_startle: float = 1.6           # flutter speed; invariant keeps v_dash > v_startle so a dash still catches
     chicken_radius: float = 1.0
     max_chickens: int = 5
     min_chickens: int = 3            # keep the world populated (fast refill below this)
@@ -102,8 +110,9 @@ class Config:
 
 
 def assert_invariants(cfg: Config) -> None:
-    # (1) dash beats flee
+    # (1) dash beats flee (and the brief startle flutter) — a dash always closes on any chicken speed
     assert cfg.v_dash > cfg.v_flee, "v_dash must exceed v_flee"
+    assert cfg.v_dash > cfg.v_startle, "v_dash must exceed v_startle so a dash still catches a startled chicken"
     # (2) stamina budget closes the flee radius with slack
     budget = (cfg.s_max / cfg.stamina_drain) * (cfg.v_dash - cfg.v_flee)
     assert budget >= cfg.catch_slack_k * cfg.r_flee, "stamina budget too small for guaranteed catch"

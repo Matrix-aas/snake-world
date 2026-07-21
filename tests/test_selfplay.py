@@ -84,7 +84,7 @@ def test_repro_reward_only_on_ego_hatch():
 
     def base_env():
         env = SnakeEnv(seed=5); env.reset(); w = env.world
-        w.chicken_pos = np.zeros((0, 2)); w.chicken_dir = np.zeros(0); w.chicken_id = np.zeros(0, int)
+        w.set_chickens([])                    # resets ALL parallel chicken arrays (incl. FSM state) consistently
         w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros(0); w.obstacle_kind = np.zeros(0, int)
         env._last_phi = env._phi(); env._last_ids = frozenset()
         return env, w

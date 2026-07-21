@@ -108,13 +108,13 @@ def test_all_snakes_eat_and_decay_and_ego_count():
     from snake_rl.config import CFG
     from snake_rl.worldgen import generate_world
     w = generate_world(CFG, seed=11, size=(140.0,140.0), n_snakes=3)
-    w.chicken_pos=np.zeros((0,2)); w.chicken_dir=np.zeros((0,)); w.chicken_id=np.zeros((0,),int)
+    w.set_chickens([])                 # set_chickens resets ALL parallel chicken arrays (incl. FSM state)
     opp = w.snakes[1]; opp.energy=10.0
-    w.chicken_pos=opp.head[None].copy(); w.chicken_dir=np.zeros(1); w.chicken_id=np.array([999])
+    w.set_chickens([opp.head])         # one chicken on the opponent's head
     assert w.try_eat() == 0            # ego ate nothing this call...
     assert opp.energy > 10.0           # ...but the opponent did
     # ego count is returned (place a chicken on the ego head)
-    ego=w.snakes[0]; w.chicken_pos=ego.head[None].copy(); w.chicken_dir=np.zeros(1); w.chicken_id=np.array([7])
+    ego=w.snakes[0]; w.set_chickens([ego.head])
     assert w.try_eat() == 1
     e=opp.energy; w.decay_energy(); assert opp.energy == max(0.0, e-CFG.energy_decay)
 
@@ -185,15 +185,15 @@ def test_chicken_flees_nearest_live_snake_opponent_only():
 
 
 def test_chicken_flees_lone_ego_snake_n1_invariant():
-    # N=1 invariance: a lone (ego) snake still makes chickens flee EXACTLY as before the fix
-    # (same direction, same speed) — the multi-snake repulsion path must never engage at N=1.
+    # N=1: a lone (ego) snake still makes a chicken flee directly away. The unified FSM enters flee
+    # with a startle flutter, so the FIRST step moves at v_startle (not v_flee) — direction unchanged.
     w = World(CFG, seed=1, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
     w.set_chickens([[30.0 + CFG.r_flee * 0.5, 30.0]])
     before = w.chicken_pos[0].copy()
     w.update_chickens()
     assert w.chicken_pos[0][0] > before[0]
-    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_flee) < 1e-6
+    assert abs(np.linalg.norm(w.chicken_pos[0] - before) - CFG.v_startle) < 1e-6
 
 
 def test_chicken_flee_resultant_avoids_both_flanking_snakes():
