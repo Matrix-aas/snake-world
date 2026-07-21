@@ -1,7 +1,10 @@
 """All balance constants and feasibility invariants — the single source of numbers."""
 from __future__ import annotations
+import logging
 import math
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,7 @@ class Config:
     hatch_energy_frac: float = 0.5   # hatchling starting energy fraction
     egg_food: float = 25.0           # food value if an egg is eaten instead of hatching
     corpse_food_per_length: float = 4.0  # food value of a dead snake's corpse, per unit length
+    egg_radius: float = 1.0          # egg footprint for ray hit-testing (Minkowski +head_radius, Pitfall 8)
     # sensing
     n_rays: int = 9
     fov_deg: float = 270.0           # total arc, centered forward (±135°)
@@ -117,6 +121,15 @@ def assert_invariants(cfg: Config) -> None:
         cfg.head_radius + cfg.body_radius + cfg.v_dash + cfg.segment_spacing), "hatchling not viable"
     # (10) food ceiling covers the population-scaled demand (soft feasibility)
     assert cfg.chicken_ceiling >= cfg.chickens_per_snake_max * cfg.n_max, "chicken_ceiling too low"
+    # (spec §10.6, soft) n_max bodies should occupy much less than the smallest world's area —
+    # not fatal if violated (worlds still function), but a full n_max of full-length snakes
+    # packed into a tiny world would make _free_point/mating geometry miserable. Log, don't fail.
+    body_area = cfg.n_max * (cfg.length_cap * 2 * cfg.body_radius + math.pi * cfg.head_radius ** 2)
+    world_area = cfg.world_size_min ** 2
+    if body_area > 0.25 * world_area:
+        log.warning("n_max snake bodies occupy %.0f%% of the smallest world's area (%.1f / %.1f) — "
+                    "consider a bigger world_size_min or a lower n_max", 100 * body_area / world_area,
+                    body_area, world_area)
 
 
 CFG = Config()

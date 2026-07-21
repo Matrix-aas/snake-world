@@ -41,8 +41,8 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1):
                           target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
                           _prev_head_uw=p.copy(), id=i, color_seed=i) for i, p in enumerate(placed)]
         w._next_snake_id = n_snakes
-    # initial chickens
-    k = int(rng.integers(1, cfg.max_chickens + 1))
+    # initial chickens (population ceiling, not the single-snake target rate)
+    k = int(rng.integers(1, cfg.chicken_ceiling + 1))
     for _ in range(k):
         w.maybe_spawn_forced()
     return w
