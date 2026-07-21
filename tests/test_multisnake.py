@@ -234,6 +234,25 @@ def test_chicken_flee_degenerate_cancellation_falls_back_to_nearest():
     assert new_chick[0] < chick[0]                   # fled west, away from the (tie-break) nearest = ego (east)
 
 
+def test_chicken_flees_live_opponent_when_ego_is_dead():
+    # Critical (review): the N<=1 branch used self.head unconditionally — the ego proxy, kept
+    # in snakes[0] and NOT alive-gated even when dead (_prune_dead keeps a dead ego in slot 0).
+    # When the ego is dead and the sole survivor is an opponent, chickens must flee the LIVE
+    # opponent, not a frozen dead-ego ghost position far away.
+    w = World(CFG, seed=33, size=(150.0, 150.0))
+    ego = w.snakes[0]
+    ego.head_uw = np.array([10.0, 10.0]); ego.head = ego.head_uw.copy()
+    ego.alive = False                                                # dead, frozen far from the chicken
+    opp = _mk_snake([100.0, 100.0], sid=1)
+    w.snakes.append(opp)
+    w.set_chickens([[106.0, 100.0]])                                 # within r_flee of the LIVE opponent only
+    w.chicken_dir[0] = np.pi                                         # points AT the opponent if wander ever fires
+    before = np.linalg.norm(w.chicken_pos[0] - opp.head)
+    w.update_chickens()
+    after = np.linalg.norm(w.chicken_pos[0] - opp.head)
+    assert after > before        # fled the live opponent, not the dead ego ghost at (10, 10)
+
+
 def test_deaths_detailed_reports_phase2_snake_cause():
     # Two snakes driven head-on into each other: cause "snake" for BOTH, surfaced per-id.
     from snake_rl.world import World, Snake, wrap

@@ -259,8 +259,12 @@ class World:
         if len(live_heads) <= 1:
             # 0 or 1 live snake: EXACT legacy formula, untouched — required so a lone/ego snake
             # (tests/test_chickens.py) flees byte-for-byte as before the multi-snake fix below.
-            # self.head is the ego proxy (unaffected by alive), matching pre-fix behavior.
-            to_head = torus_delta(self.head, self.chicken_pos, self.size)   # chicken->head
+            # Must use the actual live head, NOT self.head: the ego proxy is kept in snakes[0]
+            # even when dead (_prune_dead), so self.head alone would flee a frozen dead-ego
+            # ghost when the sole survivor is an opponent. live_heads[0] == self.head bit-for-bit
+            # whenever the ego IS that survivor, so tests/test_chickens.py is unaffected.
+            head = live_heads[0] if live_heads else self.head
+            to_head = torus_delta(head, self.chicken_pos, self.size)        # chicken->head
             dist = np.linalg.norm(to_head, axis=1)
             for i in range(len(self.chicken_pos)):
                 if dist[i] < c.r_flee and dist[i] > 1e-6:
@@ -287,8 +291,8 @@ class World:
                 if rmag > 1e-6:
                     base = np.arctan2(repulsion[1], repulsion[0])
                 else:                                                       # opposing snakes cancel out ->
-                    k = int(np.argmin(dist))                                # flee the single nearest instead
-                    base = np.arctan2(-to_heads[k][1], -to_heads[k][0])
+                    j = int(np.argmin(np.where(near, dist, np.inf)))        # flee the nearest NEAR one instead
+                    base = np.arctan2(-to_heads[j][1], -to_heads[j][0])
                 speed = c.v_flee
             else:
                 self.chicken_dir[i] += self.rng.normal(0, 0.3)              # slow wander drift
