@@ -1,13 +1,28 @@
-"""Sensory observation: vision raycasting + smell field -> a fixed 87-float per-snake vector."""
+"""Sensory observation: vision raycasting + smell field -> a fixed 113-float per-snake vector.
+
+Layout (see env._make_observation_space for the matching bounds):
+  vision   0:88   RAY_COUNT(=11) x [dist, is_obstacle, is_chicken, is_self, is_other_body,
+                  is_egg, is_corpse, obstacle_clearance]   (all /ray_range or one-hot -> [0,1])
+  social  88:95   nearest live rival, egocentric
+  egg     95:99   nearest EATABLE (owner>=0) egg, egocentric
+  smell   99:108  chicken / snake / corpse intensity+gradient fields
+  proprio 108:113 [energy, length, stamina, repro_ready, speed]
+"""
 import numpy as np
 from .world import torus_delta, torus_dist, segment_circle_hit
 
-OBS_DIM = 87
+OBS_DIM = 113
 
 
 def ray_dirs(cfg, heading):
+    """9 uniform rays over ±fov/2 PLUS n_fwd_rays forward at ± half the 9-ray spacing (16.875° for
+    fov=270/9). RAY_COUNT = n_rays + n_fwd_rays = 11. Forward offset derives from the 9-ray
+    spacing, never a mutated n_rays."""
     half = np.radians(cfg.fov_deg) / 2
     angles = heading + np.linspace(-half, half, cfg.n_rays)
+    if cfg.n_fwd_rays:
+        fwd_off = np.radians(cfg.fov_deg / (cfg.n_rays - 1)) / 2      # half the uniform 9-ray spacing
+        angles = np.concatenate([angles, heading + np.array([-fwd_off, fwd_off])])
     return np.stack([np.cos(angles), np.sin(angles)], axis=1)
 
 
@@ -40,6 +55,29 @@ def _all_targets(world, snake):
     return cen, rad, kind
 
 
+def _cast(dirs, head, size, cen, rad, ray_range):
+    """Nearest-hit distance per ray against circles (cen, rad already Minkowski-inflated).
+    Returns (dist (R,), idx (R,)): dist=ray_range & idx=-1 on a ray that hits nothing."""
+    dist = np.full(len(dirs), ray_range, float)
+    idx = np.full(len(dirs), -1, int)
+    if len(cen):
+        m = torus_delta(cen, head, size)                 # (K,2) head->center (nearest image)
+        tca = dirs @ m.T                                 # (R,K) projection of each ray
+        d2 = (m * m).sum(1)[None, :] - tca ** 2
+        r2 = (rad ** 2)[None, :]
+        thc = np.sqrt(np.clip(r2 - d2, 0.0, None))
+        t0 = tca - thc; t1 = tca + thc
+        t = np.where(t0 >= 0, t0, t1)                    # origin inside a circle -> exit point
+        valid = (d2 <= r2) & (t >= 0) & (t <= ray_range)
+        tt = np.where(valid, t, np.inf)                  # (R,K)
+        j = np.argmin(tt, axis=1)
+        best = tt[np.arange(len(dirs)), j]
+        got = np.isfinite(best)
+        dist[got] = best[got]
+        idx[got] = j[got]
+    return dist, idx
+
+
 def _scan(world, head, heading, snake=None):
     """Vectorized raycast of all rays at once. Returns (dirs (R,2), dist (R,), kind (R,))
     with kind 0=obstacle,1=chicken,2=self,3=other_body,4=egg,5=corpse,-1=none. `snake` (default ego)
@@ -50,34 +88,35 @@ def _scan(world, head, heading, snake=None):
     cen, rad, kind = _all_targets(world, snake)
     rad = rad + c.head_radius                            # inflate by head radius (Minkowski): rays report
     dirs = ray_dirs(c, heading)                          # distance until the head EDGE touches -> the snake
-    dist = np.full(c.n_rays, c.ray_range, float)         # perceives its own width, not just a center point
-    kinds = np.full(c.n_rays, -1, int)
-    if len(cen):
-        m = torus_delta(cen, head, world.size)           # (K,2) head->center (nearest image)
-        tca = dirs @ m.T                                 # (R,K) projection of each ray
-        d2 = (m * m).sum(1)[None, :] - tca ** 2
-        r2 = (rad ** 2)[None, :]
-        thc = np.sqrt(np.clip(r2 - d2, 0.0, None))
-        t0 = tca - thc; t1 = tca + thc
-        t = np.where(t0 >= 0, t0, t1)                    # origin inside a circle -> exit point
-        valid = (d2 <= r2) & (t >= 0) & (t <= c.ray_range)
-        tt = np.where(valid, t, np.inf)                  # (R,K)
-        j = np.argmin(tt, axis=1)
-        best = tt[np.arange(c.n_rays), j]
-        got = np.isfinite(best)
-        dist[got] = best[got]
-        kinds[got] = kind[j[got]]
+    dist, idx = _cast(dirs, head, world.size, cen, rad, c.ray_range)   # perceives its own width
+    kinds = np.full(len(dirs), -1, int)
+    got = idx >= 0
+    kinds[got] = kind[idx[got]]
     return dirs, dist, kinds
+
+
+def _obstacle_clearance(world, head, heading):
+    """Per-ray nearest OBSTACLE distance (ray_range if none) -- an UN-MASK channel: even when a ray's
+    nearest hit is a chicken/egg/rival, the snake still sees the solid rock behind it on that bearing
+    (a slidable-but-blocking hazard). Obstacles inflated by head_radius (Minkowski, Pitfall 4)."""
+    c = world.cfg
+    dirs = ray_dirs(c, heading)
+    if not len(world.obstacle_pos):
+        return np.full(len(dirs), c.ray_range, float)
+    dist, _ = _cast(dirs, head, world.size, world.obstacle_pos, world.obstacle_r + c.head_radius, c.ray_range)
+    return dist
 
 
 def sense_vision(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
-    _, dist, kinds = _scan(world, snake.head, snake.heading, snake)
-    out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (c.n_rays, 1))
+    dirs, dist, kinds = _scan(world, snake.head, snake.heading, snake)
+    clear = _obstacle_clearance(world, snake.head, snake.heading)
+    out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (len(dirs), 1))   # 8 features/ray
     hit = kinds >= 0
     out[hit, 0] = dist[hit] / c.ray_range
     out[hit, 1 + kinds[hit]] = 1.0
+    out[:, 7] = clear / c.ray_range                      # un-mask: nearest obstacle on this bearing
     return out
 
 
@@ -150,16 +189,18 @@ def _social(world, snake):
 def _egg_channel(world, snake):
     c = world.cfg
     e = world.eggs
-    if not len(e["pos"]):
+    eatable = e["owner"][:, 0] >= 0 if len(e["pos"]) else np.zeros(0, bool)   # arrival eggs (owner -1) uneatable
+    if not eatable.any():
         return np.zeros(4, np.float32)
-    d = torus_dist(e["pos"], snake.head, world.size)
+    pos, owner = e["pos"][eatable], e["owner"][eatable]
+    d = torus_dist(pos, snake.head, world.size)
     i = int(np.argmin(d))
     fwd = snake.heading_vec()
     left = np.array([-fwd[1], fwd[0]])
-    rel = torus_delta(e["pos"][i], snake.head, world.size)
+    rel = torus_delta(pos[i], snake.head, world.size)
     rel_fwd = float(np.clip((rel @ fwd) / c.ray_range, -1.0, 1.0))
     rel_left = float(np.clip((rel @ left) / c.ray_range, -1.0, 1.0))
-    is_mine = 1.0 if snake.id in e["owner"][i] else 0.0
+    is_mine = 1.0 if snake.id in owner[i] else 0.0
     return np.array([1.0, rel_fwd, rel_left, is_mine], np.float32)
 
 
@@ -172,7 +213,7 @@ def _repro_ready(cfg, snake):
 def observe(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
-    vision = sense_vision(world, snake).astype(np.float32).flatten()      # 63
+    vision = sense_vision(world, snake).astype(np.float32).flatten()      # 88 (11 rays x 8)
     social = _social(world, snake)                                        # 7
     egg = _egg_channel(world, snake)                                      # 4
     sm = smell(world, snake)                                              # 9
@@ -181,5 +222,6 @@ def observe(world, snake=None):
         np.clip(snake.target_length / c.length_cap, 0.0, 1.0),
         np.clip(snake.stamina / c.s_max, 0.0, 1.0),
         _repro_ready(c, snake),
-    ], np.float32)                                                        # 4
+        np.clip(snake.speed / c.v_dash, 0.0, 1.0),                       # last-move speed (prey-sense mirror)
+    ], np.float32)                                                        # 5
     return np.concatenate([vision, social, egg, sm, proprio]).astype(np.float32)
