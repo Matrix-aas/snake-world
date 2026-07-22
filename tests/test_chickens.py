@@ -63,6 +63,7 @@ def test_pecking_chicken_ignores_snake_beyond_r_flee_peck():
     # range (r_flee) but outside the tight peck range (r_flee_peck) — the stalk-and-pounce window.
     w = World(CFG, seed=3, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                     # cruising -> prey senses it (still distracted by range)
     d = 0.5 * (CFG.r_flee_peck + CFG.r_flee)            # between the two ranges
     w.set_chickens([[30.0 + d, 30.0]])
     w.chicken_state[0] = 0; w.chicken_timer[0] = 50     # pecking
@@ -76,6 +77,7 @@ def test_pecking_chicken_startles_when_snake_within_r_flee_peck():
     # Snake stalks to within r_flee_peck -> the pecking chicken startles: FLEE + a freeze beat.
     w = World(CFG, seed=3, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                          # cruising -> prey senses it
     w.set_chickens([[30.0 + CFG.r_flee_peck * 0.5, 30.0]])   # inside the tight peck range
     w.chicken_state[0] = 0; w.chicken_timer[0] = 50
     before = w.chicken_pos[0].copy()
@@ -88,16 +90,33 @@ def test_walking_chicken_flees_at_full_r_flee():
     # A WALKing chicken is alert: it flees at the full r_flee (a stalk only works on a pecking bird).
     w = World(CFG, seed=3, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                     # cruising -> prey senses it at the full r_flee
     w.set_chickens([[30.0 + CFG.r_flee * 0.7, 30.0]])   # inside r_flee, far outside r_flee_peck
     w.chicken_state[0] = 1; w.chicken_timer[0] = 50     # walking
     w.update_chickens()
     assert w.chicken_state[0] == 2                       # WALK chicken flees at the full r_flee
 
 
+def test_prey_senses_snake_speed():
+    # Prey senses MOTION: a stopped (speed 0) snake right next to a chicken does NOT alert it; the
+    # same snake at full cruise within r_flee does. Alert scales with speed, capped at 1x base.
+    w = World(CFG, seed=7, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.set_chickens([[31.0, 30.0]])                       # 1 unit away, well inside r_flee
+    w.chicken_state[0] = 1; w.chicken_timer[0] = 50      # WALK: full r_flee alert
+    w.snakes[0].speed = 0.0                              # stopped => invisible to prey
+    w.update_chickens()
+    assert w.chicken_state[0] != 2                        # did not flee
+    w.snakes[0].speed = CFG.v_snake                      # full cruise => alerts
+    w.update_chickens()
+    assert w.chicken_state[0] == 2                        # startled -> flee
+
+
 def test_startle_freeze_then_bolts_at_v_flee():
     # Entering flee: FREEZE (speed 0) for chicken_startle_steps, THEN bolt away at v_flee.
     w = World(CFG, seed=4, size=(120, 120))
     w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                     # cruising -> prey senses it
     w.set_chickens([[42.0, 40.0]])                      # inside r_flee_peck AND r_flee
     w.chicken_state[0] = 0; w.chicken_timer[0] = 50     # pecking -> startles
     for step in range(CFG.chicken_startle_steps + 1):
@@ -112,6 +131,7 @@ def test_flee_settles_to_walk_when_snake_leaves():
     # Threat gone -> resume WALK (not straight back to pecking under the snake's nose).
     w = World(CFG, seed=5, size=(120, 120))
     w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                     # cruising -> prey senses it
     w.set_chickens([[46.0, 40.0]])                      # inside r_flee of a WALKing chicken -> flee
     w.chicken_state[0] = 1; w.chicken_timer[0] = 50     # walking (alert at the full r_flee)
     w.update_chickens()
@@ -171,6 +191,7 @@ def test_ids_stable_across_eat():
 def test_chicken_never_enters_obstacle():
     w = World(CFG, seed=1, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                   # cruising -> prey senses it
     w.obstacle_pos = np.array([[40.0, 30.0]]); w.obstacle_r = np.array([3.0]); w.obstacle_kind = np.array([0])
     w.set_chickens([[34.0, 30.0]])                    # close to snake -> flees +x straight at the rock
     for _ in range(30):
@@ -187,12 +208,15 @@ def test_chicken_arrives_from_sky_before_it_is_huntable_and_sensed():
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
     w._add_chicken([30.5, 30.0], arriving=True)               # drops right by the snake's head
     assert len(w.chicken_pos) == 0 and len(w.arriving["pos"]) == 1   # in flight, not a real chicken yet
+    assert len(w.arriving["head"]) == 1                       # a stable landing heading rides along (Pitfall 17)
+    landing_head = float(w.arriving["head"][0])
     assert w.try_eat() == 0                                   # can't eat a chicken still in the air
     is_chicken = observe(w)[:63].reshape(9, 7)[:, 2]          # per-ray is_chicken one-hot
     assert not is_chicken.any()                               # ...and no vision ray reports it
     for _ in range(CFG.chicken_arrive_steps):                 # let it fall all the way down
         w._land_arrivals()
     assert len(w.arriving["pos"]) == 0 and len(w.chicken_pos) == 1   # landed -> a real chicken
+    assert float(w.chicken_dir[0]) == landing_head            # landed hen keeps its in-flight facing
     assert w.try_eat() == 1                                   # now catchable on the snake's doorstep
 
 

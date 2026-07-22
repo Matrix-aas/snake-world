@@ -21,7 +21,7 @@ def test_world_has_snake_list_and_ego_proxies():
 def test_ego_move_proxy_mutates_snakes0():
     w = World(CFG, seed=1, size=(80.0, 80.0))
     before = w.snakes[0].head_uw.copy()
-    w.move(1, 0)                      # straight, no dash — via proxy
+    w.move(3, 1, 0)                   # full-speed straight, no dash — via proxy
     assert not np.allclose(w.snakes[0].head_uw, before)
     assert w.snakes[0].steps == 1
 
@@ -34,7 +34,7 @@ def test_n1_trajectory_regression():
     w = generate_world(CFG, seed=0, size=(80.0, 80.0))
     heads = []
     for _ in range(30):
-        w.step(1, 0)                  # steer straight, no dash
+        w.step(3, 1, 0)               # full-speed straight, no dash
         assert w.snakes[0].alive      # guard: a mid-run death would stall head motion (M3)
         heads.append(w.head.copy())
     heads = np.array(heads)
@@ -57,7 +57,7 @@ def test_two_phase_step_is_order_independent_head_to_head():
               stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0,40.0]), id=1)
     w.snakes.append(b)
     # Precondition for order-independence: both snakes complete their phase-1 move before any death is resolved.
-    out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
+    out = w.step(3, 1, 0, opponent_fn=lambda world, s: (3, 1, 0))
     # Use the captured objects, not post-step w.snakes indices: both die this step ("snake" cause)
     # and _prune_dead (Milestone B) drops dead non-ego opponents from w.snakes at the end of step.
     assert a.steps == 1 and b.steps == 1   # BOTH moved (phase 1) before any resolve
@@ -86,7 +86,7 @@ def test_starvation_kills_and_leaves_corpse():
     w = World(CFG, seed=9, size=(80.0, 80.0))
     w.chicken_pos = np.zeros((0, 2)); w.chicken_dir = np.zeros((0,)); w.chicken_id = np.zeros((0,), int)
     w.snakes[0].energy = CFG.energy_decay / 2               # will hit 0 this step
-    w.step(1, 0)
+    w.step(3, 1, 0)
     assert w.snakes[0].alive is False and w.snakes[0].death_cause == "starve"
     assert w.corpses["pos"].shape[0] == 1
 
@@ -137,7 +137,7 @@ def test_step_reports_detailed_deaths_and_hatches():
     from snake_rl.worldgen import generate_world
     w = generate_world(CFG, seed=13, size=(140.0,140.0), n_snakes=2)
     w.snakes[1].energy = CFG.energy_decay/2    # opponent starves this step
-    out = w.step(1,0)
+    out = w.step(3, 1, 0)
     assert any(cause=="starve" for _id,cause in out["deaths_detailed"])
 
 
@@ -165,9 +165,10 @@ def test_hatched_owners_reported_and_cap_drops_pay_nothing():
 def _mk_snake(pos, sid):
     from snake_rl.world import Snake, wrap
     p = np.asarray(pos, float)
+    # speed=v_snake: a CRUISING snake — prey senses motion, so a stopped (speed 0) snake wouldn't alert.
     return Snake(head_uw=p.copy(), head=p.copy(), heading=0.0, path_uw=[p.copy()],
                  target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
-                 _prev_head_uw=p.copy(), id=sid)
+                 _prev_head_uw=p.copy(), id=sid, speed=CFG.v_snake)
 
 
 def test_chicken_flees_nearest_live_snake_opponent_only():
@@ -193,6 +194,7 @@ def test_chicken_flees_lone_ego_snake_n1_invariant():
     # freezes for the startle beat, so net motion after startle+1 steps is one v_flee bolt (+x).
     w = World(CFG, seed=1, size=(60, 60))
     w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                              # cruising -> prey senses it
     w.set_chickens([[30.0 + CFG.r_flee * 0.5, 30.0]])
     w.chicken_state[0] = 1                                        # WALK: alert at the full r_flee
     before = w.chicken_pos[0].copy()
@@ -211,7 +213,7 @@ def test_chicken_flee_resultant_avoids_both_flanking_snakes():
     # chicken away from BOTH.
     w = World(CFG, seed=30, size=(150.0, 150.0))
     chick = np.array([75.0, 75.0])
-    ego = w.snakes[0]; ego.head_uw = chick + [6.0, 0.0]; ego.head = ego.head_uw.copy()
+    ego = w.snakes[0]; ego.head_uw = chick + [6.0, 0.0]; ego.head = ego.head_uw.copy(); ego.speed = CFG.v_snake
     theta = np.radians(100.0)
     opp = _mk_snake(chick + 7.0 * np.array([np.cos(theta), np.sin(theta)]), sid=1)
     w.snakes.append(opp)
@@ -232,7 +234,7 @@ def test_chicken_flee_degenerate_cancellation_falls_back_to_nearest():
     # vectors cancel to ~0. Must not NaN/stall — falls back to fleeing the single nearest snake.
     w = World(CFG, seed=31, size=(150.0, 150.0))
     chick = np.array([75.0, 75.0])
-    ego = w.snakes[0]; ego.head_uw = chick + [8.0, 0.0]; ego.head = ego.head_uw.copy()    # due east
+    ego = w.snakes[0]; ego.head_uw = chick + [8.0, 0.0]; ego.head = ego.head_uw.copy(); ego.speed = CFG.v_snake  # due east
     opp = _mk_snake(chick + [-8.0, 0.0], sid=1)                                            # due west
     w.snakes.append(opp)
     w.set_chickens([chick])
@@ -277,6 +279,6 @@ def test_deaths_detailed_reports_phase2_snake_cause():
               heading=np.pi, path_uw=[np.array([43.0, 40.0])], target_length=CFG.start_length,
               stamina=CFG.s_max, energy=CFG.energy_max, _prev_head_uw=np.array([43.0, 40.0]), id=1)
     w.snakes.append(b)
-    out = w.step(1, 0, opponent_fn=lambda world, s: (1, 0))
+    out = w.step(3, 1, 0, opponent_fn=lambda world, s: (3, 1, 0))
     causes = dict(out["deaths_detailed"])
     assert causes.get(0) == "snake" and causes.get(1) == "snake"

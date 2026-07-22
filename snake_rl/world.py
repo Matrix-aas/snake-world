@@ -21,6 +21,8 @@ class Snake:
     death_cause: object = None
     steps: int = 0
     repro_cooldown: int = 0
+    stun: int = 0          # >0 => frozen (dizzy) after dashing into a solid; counts down in _move_snake
+    speed: float = 0.0     # actual translation speed of the LAST move (0 while stopped/stunned) -> prey sense
 
     def heading_vec(self):
         return np.array([np.cos(self.heading), np.sin(self.heading)])
@@ -111,7 +113,10 @@ class World:
         # here, falling, then lands into the real chicken_* arrays. Kept SEPARATE from chicken_pos so
         # sensors/eat (which read chicken_pos) never see an in-flight bird. sky=True in the viewer /
         # training world (worldgen `arrivals=True`); False keeps the plain instant-spawn for unit fixtures.
-        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int)}
+        # "head" carries a stable random heading per in-flight bird (set at spawn), handed to the
+        # landed chicken's chicken_dir so the fall's facing matches where it walks off (render only).
+        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int),
+                         "head": np.zeros((0,))}
         self.chicken_sky = False
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
@@ -120,18 +125,78 @@ class World:
         self._mate_streak = {}
 
     # --- motion (per-snake workers) ---
-    def _move_snake(self, s, steering, dash):
+    def _slide(self, p0, disp, centers, radii):
+        """Move p0 by disp; if it would enter any solid circle (center, radius), slide along the first
+        one hit (project the remaining motion onto the tangent). Returns (new_pos_uw, hit: bool).
+        centers compared via torus_delta; radii already include head_radius."""
+        if not len(centers):
+            return p0 + disp, False
+        d = disp
+        m = torus_delta(centers, p0, self.size)              # (K,2) p0->center
+        a = float(d @ d)
+        best_t, best_i = 1.0, -1
+        if a > 1e-12:
+            b = -2.0 * (m @ d)
+            c = np.einsum("ij,ij->i", m, m) - radii ** 2
+            disc = b * b - 4 * a * c
+            ok = disc >= 0
+            t0 = np.where(ok, (-b - np.sqrt(np.clip(disc, 0, None))) / (2 * a), np.inf)
+            t0 = np.where(ok & (t0 >= -1e-9) & (t0 <= 1.0), t0, np.inf)
+            i = int(np.argmin(t0))
+            if np.isfinite(t0[i]):
+                best_t, best_i = max(0.0, float(t0[i])), i
+        if best_i < 0:
+            return p0 + d, False
+        contact = p0 + best_t * d
+        n = torus_delta(contact[None], centers[best_i][None], self.size)[0]   # center->contact (outward)
+        ln = np.linalg.norm(n)
+        if ln < 1e-9:
+            return contact, True
+        n = n / ln
+        rem = (1.0 - best_t) * d
+        tang = rem - (rem @ n) * n
+        out = contact + tang
+        md = torus_delta(centers, out, self.size)
+        if (np.einsum("ij,ij->i", md, md) < radii ** 2 - 1e-6).any():
+            out = contact + 1e-3 * n
+        return out, True
+
+    def _move_snake(self, s, speed_idx, steer, dash):
         c = self.cfg
-        if steering == 0:
+        if s.stun > 0:                                   # dizzy from a dash into a solid: frozen (steering too)
+            s.stun -= 1
+            s.dashed = False
+            s.speed = 0.0
+            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)   # reserve refills while stunned (M1)
+            s._prev_head_uw = s.head_uw.copy()
+            s.path_uw.append(s.head_uw.copy())
+            self._prune_path(s)
+            s.steps += 1
+            return False
+        if steer == 0:
             s.heading -= np.radians(c.turn_deg)
-        elif steering == 2:
+        elif steer == 2:
             s.heading += np.radians(c.turn_deg)
         s.heading %= 2 * np.pi
         dashing = bool(dash) and s.stamina >= c.dash_min_stamina  # reserve gate (curriculum-tunable)
-        speed = c.v_dash if dashing else c.v_snake
+        speed = c.v_dash if dashing else c.speed_levels[speed_idx] * c.v_snake
+        s.speed = speed
         prev_uw = s.head_uw.copy()
-        s.head_uw = prev_uw + speed * s.heading_vec()
-        s.head = wrap(s.head_uw, self.size)
+        disp = speed * s.heading_vec()
+        # solids the head slides along (Minkowski + head_radius): obstacles + own body (neck-skipped)
+        cen, rad = [], []
+        if len(self.obstacle_pos):
+            cen.append(self.obstacle_pos); rad.append(self.obstacle_r + c.head_radius)
+        body = self._body_points_uw(s)                   # keeps the Pitfall-5 neck-skip
+        if len(body):
+            cen.append(body); rad.append(np.full(len(body), c.body_radius + c.head_radius))
+        solid_centers = np.concatenate(cen, axis=0) if cen else np.zeros((0, 2))
+        solid_radii = np.concatenate(rad, axis=0) if rad else np.zeros((0,))
+        new, hit = self._slide(prev_uw, disp, solid_centers, solid_radii)
+        if hit and dashing:                              # dashed into a solid -> head-spinning stun
+            s.stun = c.stun_steps
+        s.head_uw = new
+        s.head = wrap(new, self.size)
         s.path_uw.append(s.head_uw.copy())
         self._prune_path(s)
         if dashing:
@@ -234,15 +299,17 @@ class World:
             return 0, int(self.rng.integers(c.chicken_peck_min, c.chicken_peck_max + 1))
         return 1, int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
 
-    def _add_chicken(self, p, arriving=False):
+    def _add_chicken(self, p, arriving=False, head=None):
         p = np.asarray(p, float)
+        h = float(self.rng.uniform(0, 2 * np.pi)) if head is None else float(head)
         if arriving:                                     # queue a sky-drop; lands into the real arrays later
             self.arriving["pos"] = (np.vstack([self.arriving["pos"], p[None]])
                                     if len(self.arriving["pos"]) else p[None].copy())
             self.arriving["timer"] = np.append(self.arriving["timer"], self.cfg.chicken_arrive_steps)
+            self.arriving["head"] = np.append(self.arriving["head"], h)   # lockstep with pos/timer (Pitfall 17)
             return
         self.chicken_pos = np.vstack([self.chicken_pos, p]) if len(self.chicken_pos) else p[None]
-        self.chicken_dir = np.append(self.chicken_dir, self.rng.uniform(0, 2 * np.pi))
+        self.chicken_dir = np.append(self.chicken_dir, h)   # landed birds keep their in-flight facing
         self.chicken_id = np.append(self.chicken_id, self._next_chicken_id)
         st, tm = self._random_state_timer()
         self.chicken_state = np.append(self.chicken_state, st)
@@ -260,10 +327,10 @@ class World:
         a["timer"] = a["timer"] - 1
         landed = a["timer"] <= 0
         if landed.any():
-            for p in a["pos"][landed]:
-                self._add_chicken(p, arriving=False)
+            for p, h in zip(a["pos"][landed], a["head"][landed]):
+                self._add_chicken(p, arriving=False, head=h)     # keep the in-flight facing on landing
             keep = ~landed
-            a["pos"] = a["pos"][keep]; a["timer"] = a["timer"][keep]
+            a["pos"] = a["pos"][keep]; a["timer"] = a["timer"][keep]; a["head"] = a["head"][keep]
 
     def set_chickens(self, positions):
         """Place chickens at explicit positions with fresh stable ids (setup/debug helper)."""
@@ -278,7 +345,8 @@ class World:
         self.chicken_state = sts
         self.chicken_timer = tms
         self.chicken_startle = np.zeros(n, int)
-        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int)}   # full chicken reset
+        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int),
+                         "head": np.zeros((0,))}                                         # full chicken reset
         self._next_chicken_id += n
 
     def _blocked(self, old, new):
@@ -307,28 +375,33 @@ class World:
                     break
 
         # Live heads only (the ego proxy is kept in snakes[0] even when dead, so filter on .alive):
-        # a chicken must flee the actual LIVE snake, never a frozen dead-ego ghost.
-        heads = np.array([s.head for s in self.snakes if s.alive]) if any(
-            s.alive for s in self.snakes) else np.zeros((0, 2))
+        # a chicken must flee the actual LIVE snake, never a frozen dead-ego ghost. Carry each live
+        # snake's SPEED too -> prey senses motion (a stopped snake is invisible; Task 3).
+        live = [s for s in self.snakes if s.alive]
+        heads = np.array([s.head for s in live]) if live else np.zeros((0, 2))
+        speeds = np.array([s.speed for s in live]) if live else np.zeros((0,))
         for i in range(len(self.chicken_pos)):
-            base, speed = self._chicken_step(i, heads)
+            base, speed = self._chicken_step(i, heads, speeds)
             if speed > 0.0:
                 steer(i, base, speed)                                   # peck (speed 0) just stands still
 
-    def _chicken_step(self, i, heads):
-        """FSM transition for chicken i against live snake `heads`; returns (heading, speed).
-        Mutates chicken_state/timer/startle in place. Flee overrides the peck/walk timer; when no
-        snake is near a fleeing chicken it settles to WALK (not straight back to pecking under a nose)."""
+    def _chicken_step(self, i, heads, speeds):
+        """FSM transition for chicken i against live snake `heads` (moving at `speeds`); returns
+        (heading, speed). Mutates chicken_state/timer/startle in place. Flee overrides the peck/walk
+        timer; when no snake is near a fleeing chicken it settles to WALK (not straight back to pecking)."""
         c = self.cfg
-        # --- threat: flee the repulsion resultant of every snake within the alert radius (never bolt
+        # --- threat: flee the repulsion resultant of every snake within its alert radius (never bolt
         #     from one snake straight into another; opposing snakes that cancel -> flee the nearest).
-        #     A head-down PECKING chicken is distracted: it only notices a snake within the tight
-        #     r_flee_peck (the stalk-and-pounce window). WALK / already-fleeing use the full r_flee. ---
+        #     A head-down PECKING chicken is distracted: base alert is the tight r_flee_peck (the
+        #     stalk-and-pounce window); WALK / already-fleeing use the full r_flee. Prey senses MOTION:
+        #     each snake's effective alert scales with its speed, CAPPED at 1x base -> a stopped snake
+        #     never alerts, a dash is no scarier than full cruise (keeps max alert = today's r_flee). ---
         alert = c.r_flee_peck if self.chicken_state[i] == 0 else c.r_flee
         if len(heads):
             to_heads = torus_delta(heads, self.chicken_pos[i], self.size)   # (K,2) chicken->each head
             dist = np.linalg.norm(to_heads, axis=1)
-            near = (dist < alert) & (dist > 1e-6)
+            eff = alert * np.clip(speeds / c.v_snake, 0.0, 1.0)             # per-snake speed-scaled reach
+            near = (dist < eff) & (dist > 1e-6)
         else:
             near = np.zeros(0, bool)
         if near.any():
@@ -576,17 +649,10 @@ class World:
         return np.array(pts), np.array(rads)
 
     def _death_cause(self, s):
-        """Pure — returns 'obstacle'|'self'|'snake'|None for s vs post-move state. No mutation."""
+        """Pure — returns 'snake'|None for s vs post-move state. No mutation. Obstacles and the snake's
+        OWN body are now solid (slid along in _move_snake), never lethal; only a RIVAL's body/head
+        kills (cut-off), swept over s._prev_head_uw -> s.head_uw (the slid path)."""
         c = self.cfg; hr = c.head_radius
-        p0, p1 = s._prev_head_uw, s.head_uw
-        if len(self.obstacle_pos) and segment_circle_hit(
-                wrap(p0, self.size), wrap(p1, self.size), self.obstacle_pos, self.obstacle_r + hr,
-                self.size).any():
-            return "obstacle"
-        body = self._body_points_uw(s)                 # self set KEEPS the neck-skip
-        if len(body) and segment_circle_hit(
-                p0, p1, body, np.full(len(body), c.body_radius + hr), self.size).any():
-            return "self"
         opts, orads = self._other_hazard(s)
         if len(opts) and segment_circle_hit(
                 s._prev_head_uw, s.head_uw, opts, orads + hr, self.size).any():
@@ -604,25 +670,25 @@ class World:
     _EGO_ATTRS = ("head_uw", "head", "heading", "target_length", "stamina", "energy",
                   "alive", "dashed", "death_cause", "steps", "path_uw", "_prev_head_uw")
 
-    def heading_vec(self):            return self.snakes[0].heading_vec()
-    def move(self, steering, dash):   return self._move_snake(self.snakes[0], steering, dash)
-    def check_death(self):            return self._check_death(self.snakes[0])
+    def heading_vec(self):                     return self.snakes[0].heading_vec()
+    def move(self, speed_idx, steer, dash):    return self._move_snake(self.snakes[0], speed_idx, steer, dash)
+    def check_death(self):                     return self._check_death(self.snakes[0])
     def body_points_uw(self):         return self._body_points_uw(self.snakes[0])
     def body_points(self):            return self._body_points(self.snakes[0])
     def body_render_path_uw(self, spacing=None):
         return self._body_render_path_uw(self.snakes[0], spacing)
 
-    def step(self, steering, dash, opponent_fn=None):
-        opponent_fn = opponent_fn or (lambda world, s: (1, 0))
+    def step(self, speed_idx, steer, dash, opponent_fn=None):
+        opponent_fn = opponent_fn or (lambda world, s: (1, 1, 0))    # default opp: ⅓-cruise straight
         # phase 1: EVERY snake (ego + opponents) acts on the PRE-MOVE world, so collect all opponent
         # actions BEFORE moving anyone [M-2], then move ego, then move opponents with those actions.
         ego = self.snakes[0]
         opp_actions = {o.id: opponent_fn(self, o) for o in self.snakes[1:] if o.alive}
-        ego_dashed = self._move_snake(ego, steering, dash) if ego.alive else False
+        ego_dashed = self._move_snake(ego, speed_idx, steer, dash) if ego.alive else False
         for o in self.snakes[1:]:
             if o.alive:
-                st, da = opp_actions[o.id]
-                self._move_snake(o, st, da)
+                sp, st, da = opp_actions[o.id]
+                self._move_snake(o, sp, st, da)
         # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
         dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]
         for s, cause in dying:
