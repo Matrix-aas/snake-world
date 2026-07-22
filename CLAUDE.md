@@ -47,14 +47,14 @@ session-by-session build reports live in `.superpowers/sdd/*-report.md` and the 
 | File | Does | Retrain if changed? |
 |---|---|---|
 | `snake_rl/config.py` | ALL constants (frozen `Config`) + `assert_invariants` | usually yes |
-| `snake_rl/world.py` | torus geometry, `Snake` dataclass, `World.snakes[]`, per-snake motion/dash/stamina, **two-phase `step()`** (move all → resolve all deaths → chickens/eat/energy/starvation/spawn/mating/hatching), inter-snake cut-off + corpses, peck/walk/flee chicken FSM, egg-based reproduction | yes (dynamics) |
-| `snake_rl/worldgen.py` | random world (size, obstacles, N spread-out spawned snakes, initial chickens up to the population ceiling) | yes |
+| `snake_rl/world.py` | torus geometry, `Snake` dataclass, `World.snakes[]`, per-snake motion/dash/stamina, **two-phase `step()`** (move all → resolve all deaths → **land sky-drops**/chickens/eat/energy/starvation/spawn/mating/hatching), inter-snake cut-off + corpses, peck/walk/flee chicken FSM, egg-based reproduction + **guaranteed arrival eggs** (`spawn_egg`), **sky-drop chicken arrivals** (`world.arriving`/`_land_arrivals`) | yes (dynamics) |
+| `snake_rl/worldgen.py` | random world (size, obstacles, N spread-out spawned snakes, initial chickens up to the population ceiling); **`arrivals=True`**: only the ego spawns live, every other snake ARRIVES via a `spawn_egg`, and runtime chickens drop from the sky (`world.chicken_sky`) | yes |
 | `snake_rl/sensors.py` | vectorized raycast (7 categories) + social + egg + smell (chicken/rival/corpse) + proprio → 87-float per-snake observation | **yes** (obs) |
 | `snake_rl/selfplay.py` | `OpponentController` — drives in-env opponents from a synced policy snapshot, replicating the exact `VecFrameStack`+`VecNormalize` preprocessing the SB3 learner sees | **yes** (self-play plumbing, mirrors sensors) |
 | `snake_rl/env.py` | Gymnasium env: snake 0 = the learner ("ego"); opponents stepped via `OpponentController`; reward (eat/reproduce/death + PBRS); dual curriculum (`set_hardness`: stamina **and** mating); 87-float obs-space bounds | yes (reward/obs) |
 | `snake_rl/train.py` | SB3 PPO, VecEnv stack, `AnnealHardness` + `SyncOpponentPolicy` callbacks, checkpoints | recipe only |
-| `snake_rl/render.py` | pygame drawing: sprites, per-snake ring HUD, eggs/corpses, blood/gore, sprite-sheet animations | **no** (visual only) |
-| `snake_rl/watch.py` | load model, build a **persistent** multi-snake world (never resets on any single death), reseed floor, interpolated viewer, headless ecosystem eval | no (except obs plumbing) |
+| `snake_rl/render.py` | pygame drawing: sprites, per-snake ring HUD, eggs/corpses, blood/gore, sprite-sheet animations, **sky-drop chicken arrival animation** (`_draw_arrivals`: `chicken_fall` flap sheet, gravity ease-in + shrink toward the ground + growing/darkening `_drop_shadow`, damped-smooth glide, per-bird random heading, cream-tint match, `spawn_land` puff) | **no** (visual only) |
+| `snake_rl/watch.py` | load model, build a **persistent** multi-snake world (never resets on any single death, `arrivals=True`), **egg-based reseed floor**, interpolated viewer, headless ecosystem eval | no (except obs plumbing) |
 | `snake_rl/__main__.py` | CLI dispatch | no |
 
 Data flow (training): `worldgen → World` (N snakes, physics) → `sensors.observe(world, snake)` per
@@ -118,8 +118,10 @@ DummyVecEnv([ Monitor(SnakeEnv) ]) ) )`. The underlying world is
 - **Reward (sparse — never dense "cooperation" shaping):** `+reward_eat` once per item consumed
   (chicken, corpse, or a foreign egg — never per-bite of a big corpse); `+reward_repro` **only on
   the real hatch of an egg the ego co-owns** (deferred to hatch, not laying — a raided or
-  population-cap-dropped egg pays nothing, so guarding matters); `reward_death` on any death cause;
-  PBRS toward the nearest chicken (unchanged, Pitfall 3). Cooperation emerges only because
+  population-cap-dropped egg pays nothing, so guarding matters); `reward_death` on any death cause
+  (**but obstacle death costs more — `reward_death_obstacle`**, Pitfall 16);
+  **two** PBRS potentials — one pulling toward the nearest chicken (Pitfall 3), one pushing out of a
+  potential well around obstacles (Pitfall 16). Cooperation emerges only because
   `+reward_repro` is unreachable alone; "avoid bigger snakes" emerges because their body is lethal
   — no proximity/friendship bonus.
 - **Memory:** `VecFrameStack(4)`, NOT an LSTM — unchanged reasoning (self-collision memory, 0
@@ -142,6 +144,14 @@ DummyVecEnv([ Monitor(SnakeEnv) ]) ) )`. The underlying world is
   is already at `n_max` (the egg just expires). A snake whose `energy` hits 0 dies of
   `"starve"`. Any death (`obstacle`/`self`/`snake`/`starve`) spawns a corpse
   (`corpse_food_per_length · length` food) that anyone can scavenge.
+- **Every new NON-ego snake ARRIVES via an egg — no popping in (Goal 1, Pitfalls 17–18).** Both
+  worldgen opponents (`arrivals=True`) and the viewer reseed floor lay a **guaranteed arrival egg**
+  via `world.spawn_egg` instead of materializing a snake. It reuses the repro egg/hatch machinery but
+  is marked by a **sentinel owner `[-1,-1]`** (nobody's), which makes it: **uneatable** (`_snake_eat`
+  gates eating on `owner[:,0] >= 0`), **`n_max`-cap-exempt** in `_hatch_eggs` (a guaranteed arrival
+  must hatch), and **not a reproduction** (excluded from `hatched_owners`, so it pays no `reward_repro`
+  and isn't counted as an organic "birth"). It renders + cracks open exactly like a repro egg (free).
+  The **ego is always a live snake at step 0** — `SnakeEnv` can't drive an inert egg.
 - **Chicken behavior FSM (peck / walk / flee).** Each chicken cycles **PECK** (stands still,
   `chicken_peck_min..max` steps — the prime catch window) ⇄ **WALK** (`v_wander` amble,
   `chicken_walk_min..max` steps) on a timer; any live snake within the **alert radius** triggers
@@ -152,12 +162,29 @@ DummyVecEnv([ Monitor(SnakeEnv) ]) ) )`. The underlying world is
   chicken is *distracted*, catchable by stalking up and pouncing — vs. the full `r_flee` (12)
   while walking or already fleeing. This (Pitfall 10) is what makes hunting discoverable at all
   with 2–4 snakes competing for the same chickens.
-- **Persistent-viewer reseed floor.** The training env resets on ego death (short episodes); the
-  viewer/headless-eval world does not (Pitfall 11). `watch._reseed_floor`, called every
-  `_step_world` tick, spawns a fresh full-health snake (via `World._free_point`, same placement
-  worldgen uses) whenever the live count drops below `cfg.n_start_min` (2) — a hard "the
-  screensaver never truly dies" floor, a no-op whenever natural dynamics keep the population
-  healthy.
+- **Chickens DROP FROM THE SKY, not pop in (Goal 2, Pitfall 17).** In a production world
+  (`world.chicken_sky`, set by `worldgen(arrivals=True)`), a runtime-spawned chicken first spends
+  `chicken_arrive_steps` **falling** — a growing ground shadow + the hen descending — living in a
+  **separate `world.arriving` array** (NOT `chicken_pos`), so it is **unsensed and uneatable** while
+  in the air; `_land_arrivals` (phase 3 of `step`) drops it into the real chicken arrays once it
+  lands. **Initial worldgen chickens land instantly** (`arriving=False`) so episode-start food is
+  immediate. `maybe_spawn` counts in-flight birds toward the population target so it doesn't
+  over-spawn while they fall. Purely a spawn presentation — no reward/obs change. The *render* of the
+  fall (a dedicated `chicken_fall` top-down flap sheet, gravity ease-in, shrink, growing shadow,
+  damped-smooth glide, random heading) lives entirely in `render._draw_arrivals`. **Pending world
+  hook:** for the falling hen to keep the *exact* heading it lands with, `world.arriving` should carry
+  a `head` array (random at spawn in `_add_chicken`, passed to `chicken_dir` in `_land_arrivals`);
+  `render._draw_arrivals` already reads `world.arriving.get("head")` when present, else falls back to a
+  stable per-position pseudo-random heading (so in flight it's varied, but the landed hen's heading
+  can differ until that field exists).
+- **Persistent-viewer reseed floor (now egg-based, Goal 1).** The training env resets on ego death
+  (short episodes); the viewer/headless-eval world does not (Pitfall 11). `watch._reseed_floor`,
+  called every `_step_world` tick, lays **guaranteed arrival egg(s)** (`spawn_egg`, placed via
+  `World._free_point`) whenever **live snakes PLUS pending arrival eggs** drop below `cfg.n_start_min`
+  (2) — so even a reseed *arrives via an egg* rather than popping in. The floor now guarantees
+  *arrivals in flight* (live + incubating eggs ≥ 2), NOT *live ≥ 2 instantly*: the **live** count can
+  dip briefly (even to 0, showing only rattling eggs) while a reseed egg incubates `egg_timer` steps,
+  then recovers. A no-op whenever natural dynamics keep the population healthy.
 
 ---
 
@@ -256,6 +283,62 @@ Every one of these cost real training runs (some cost more than one). Do not red
     SB3's reported fps read absurdly low afterward (it divides steps by a wall-clock time inflated
     by the sleep, not by actual compute time). Use `caffeinate` for long unattended runs and judge
     real throughput from step-timestamps, not the printed fps alone.
+16. **Obstacle deaths are a REWARD GAP, not a sensing bug — fix them with a PBRS well, not a raw
+    penalty, and not "more training".** The shipped model plowed into rocks/trees ~37% of deaths
+    (`obstacle 62 / snake 106 / self 0` over 40k headless steps). It was NOT a bug: `self 0` proves
+    vision+frame-stack memory work, collision is swept (no tunneling), and obstacles are sensed
+    (ray kind 0). The cause was purely reward: nothing rewarded avoidance beyond the shared
+    `reward_death`, while the chicken PBRS actively pulled the head *through* obstacles toward a
+    chicken behind them. Two things follow. (a) **"Just дотренировать" cannot help** — the ceiling
+    is the reward structure, not step count; more steps of a reward that never mentions obstacles
+    won't teach avoidance. (b) **Add it as a second PBRS potential, never a per-step penalty** — a
+    raw proximity penalty risks the Pitfall-1 survive-only collapse, but PBRS is *policy-invariant*
+    (it telescopes to zero over a trajectory, only redistributing reward as a local gradient), so it
+    provides a steer-away gradient near obstacles *without* changing the optimal policy or
+    suppressing hunting. `env._phi_obstacle` is a linear well: `0` beyond `obs_avoid_range` (8.0),
+    dipping to `-obs_avoid_weight` (0.7) at the lethal surface (`obstacle_r + head_radius`, exactly
+    where `_death_cause` fires). **Calibrate the weight:** `1.5` on an interrupted 2.6M resume cut
+    obstacle-hazard/snake-step ~20% but over-suppressed aggression (cut-off kills −71%, catch −21%,
+    paired multi-seed eval) — PBRS is policy-invariant only in the limit; a strong well on a short
+    resume biases toward globally timid play. `0.7` (~½ the chicken-potential magnitude) is retuned.
+    Obstacles are static within an episode (never eaten/spawned/moved),
+    so unlike the chicken term this one is paid **every step, no set-change zeroing** (Pitfall 3).
+    It changes the reward → a retrain, but because PBRS keeps the trained hunter optimal, a **resume**
+    (`./snake train --steps 3000000`, starts fully hard) teaches avoidance on top in ~20-30 min
+    instead of a full 8M-from-scratch — the safest, cheapest path. Obs unchanged (`OBS_DIM` still
+    87): the potential reads obstacle positions that were already sensed, so no obs-distribution
+    shift, and the resume is valid.
+    **PBRS alone is NOT enough — pair it with a heavier crash penalty.** PBRS is *policy-invariant*:
+    it teaches the avoidance *skill* faster but never changes *which* policy is optimal. And under a
+    flat `reward_death −10`, chasing a chicken flanked by rocks is a genuinely **+EV gamble** (a
+    `+reward_eat 10` catch plus energy outweighs a ~30% crash at −10), so the reward-optimal policy
+    *plows into rocks on purpose* — a real user-visible failure ("chicken between two rocks → snake
+    runs at it and crashes"). No amount of PBRS or extra training fixes a +EV behavior; only a bigger
+    crash cost does. So obstacle death pays `reward_death_obstacle` (−20, 2× the flat −10), flipping
+    the gamble negative-EV — **cause-specific** so `snake`/`self`/`starve` stay at −10 (don't
+    re-suppress cut-off aggression, only the plow-into-rocks behavior). The PBRS well (skill) + the
+    heavier crash cost (incentive) are the two halves of the fix; use both.
+17. **Staged arrivals must live OUTSIDE `chicken_pos` — because you can't edit `sensors.py` to
+    exclude them.** For chickens to "arrive from the sky" (Goal 2) they must be **unsensed and
+    uneatable while falling**, but `sensors._all_targets`/`smell`/`env._phi` all read
+    `world.chicken_pos` directly and (per the constraint) sensors is off-limits. The fix is *where the
+    data lives*, not a sensor filter: in-flight birds sit in a **separate `world.arriving` array** and
+    only get appended to `chicken_pos` when they land (`_land_arrivals`, phase 3 of `step`). So
+    nothing that reads `chicken_pos` ever sees them — no sensors/eat/PBRS change needed. Same trick
+    for arrival **snakes** (Goal 1): a guaranteed egg is just an egg with **sentinel owner `[-1,-1]`**,
+    which the *existing* egg code already renders/hatches; only three tiny `world.py` gates make it
+    special (uneatable via `owner>=0`, cap-exempt in `_hatch_eggs`, excluded from `hatched_owners`).
+    Reuse the machinery, mark the exception — don't fork a parallel system.
+18. **`worldgen(arrivals=True)` is TRAINING-active, and the ego must stay a live snake.** `env.reset`
+    passes `arrivals=True`, so during training opponents START as incubating eggs (hatch in
+    ~`egg_timer//2..egg_timer` steps) and runtime chickens drop from the sky — a real dynamics change
+    the policy experiences (retrain-relevant, and fine: a from-scratch retrain is planned). Two
+    guardrails: (a) **snake 0 (the ego) is ALWAYS spawned live** — `SnakeEnv` drives it from step 0 and
+    cannot steer an inert egg, so only `snakes[1:]` become eggs. (b) The `arrivals` flag **defaults
+    `False`** so unit-test fixtures that build a multi-snake `generate_world(n_snakes=K)` still get K
+    *live* snakes; only the production paths (`env.reset`, `watch`) opt in. Consequence: any test that
+    reads `env.world.snakes[1]` right after `reset()` must instead account for eggs (a few
+    `test_selfplay` tests were updated to count pending arrival eggs / add an explicit opponent).
 
 ---
 
@@ -289,7 +372,8 @@ below): `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curri
 
 **Chicken FSM:** `chicken_peck_min/max 12/35`, `chicken_walk_min/max 18/45`,
 `chicken_startle_steps 4`, `r_flee 12` (walk/flee alert), `r_flee_peck 2.5` (peck alert — the
-stalk-and-pounce window, Pitfall 10).
+stalk-and-pounce window, Pitfall 10). **`chicken_arrive_steps 12`** — a sky-dropped chicken falls
+for this many steps (in `world.arriving`, unsensed/uneatable) before it lands (Goal 2, Pitfall 17).
 
 **Reproduction / eggs / corpses (values that TRAINED the shipped model, i.e. the curriculum's hard
 endpoint during training):** `repro_energy_frac 0.7`, `repro_length_min 10.0`, `r_mate 4.0`,
@@ -303,6 +387,16 @@ stays inside the curriculum's already-swept range): `stamina_regen 0.3→0.42`, 
 `mate_steps 4→2`, `repro_cost 30.0→18.0`, `repro_length_min 10.0→8.0`, `repro_cooldown 120→80`.
 `config.py` documents both the pre- and post-easing values inline; **don't retune these further
 without re-checking Pitfall 12's reasoning.**
+
+**Reward:** `reward_eat 10.0`, `reward_repro 12.0`, `reward_death −10.0`, **`reward_death_obstacle
+−20.0`** (obstacle crashes cost 2× — flips the chase-into-rocks +EV gamble negative, Pitfall 16),
+`step_penalty 0.01`, `dash_penalty 0.0` (rationed by stamina, not reward — Pitfall 1).
+**Obstacle-avoidance PBRS (Pitfall 16):** `obs_avoid_weight 0.7` (well depth at the lethal surface;
+retuned down from 1.5, which over-suppressed aggression on a short resume — the heavier crash cost
+now carries the avoidance *incentive*, the PBRS well just the *skill*), `obs_avoid_range 8.0`
+(head-surface→obstacle-surface reach). A reward change → retrain; the shipped-after-this model was a
+**resume** (`./snake train --steps 3000000`) on top of the pre-obstacle hunter, since PBRS keeps it
+optimal.
 
 Curriculum ramp: `hardness_warmup 0.42`, `hardness_full 0.85` (of total training steps) — governs
 BOTH the stamina gate/regen and the mating gate together (`env.set_hardness`).
@@ -359,9 +453,10 @@ dict. A healthy multi-snake model:
 - **per-snake catch rate** ≈ 10–14 items / 1000 snake-steps (confirmed ~11.9 on the shipped
   model) — computed per-snake-step, not population-summed, or it'd scale with headcount;
 - **dash usage** ≈ 25–36% of live snake-steps (deliberate bursts, not constant);
-- **population** sustains around 2–4 (never below `n_start_min=2`, guaranteed by the reseed floor;
-  organic births on top of that, 11–30 per 10k–20k-step run — a genuinely living cycle, not just
-  floor-padding);
+- **population** sustains around 2–4 (the egg-based reseed floor guarantees *live + incubating
+  arrival eggs* ≥ `n_start_min=2`, so the **live** count can dip briefly while a reseed egg hatches —
+  a transient `min 1` over a run is normal, not a failure; organic births on top of that, 11–30 per
+  10k–20k-step run — a genuinely living cycle, not just floor-padding);
 - **deaths**: mostly `obstacle`, a real number of `snake` (cut-off kills — predation is genuinely
   emergent, not just avoidance), `self` ≈ 0 (frame-stack memory still works), `starve` rare/few;
 - **births + kills + (occasional) starvations all present at once** = the full hunt → grow →
@@ -374,14 +469,16 @@ well before `ep_rew_mean` fully recovers from the mid-ramp dip. `snake/hardness`
 
 ## Testing
 
-`SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest -q` (126 tests, ~8s). One
+`SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest -q` (132 tests, ~8s). One
 runnable `assert` per non-trivial mechanic: torus nearest-image, raycast (incl. rival/egg/corpse
 ray kinds), swept/tunneling collision, self-collision reachability + straight-motion regression,
 two-phase-step order-independence + head-to-head, inter-snake cut-off, corpse spawn/eat-once,
-mate→egg→hatch + parent-can't-eat-own-egg + egg raid, starvation, population cap, population-scaled
-food, chicken peck/walk/flee FSM + startle-freeze + peck-distraction, PBRS telescoping + set-change
-zeroing, stamina gate, opponent-obs preprocessing parity, `check_env` (single- and multi-snake),
-interpolation, color/ring-HUD determinism. Spread across `tests/test_torus.py`,
+mate→egg→hatch + parent-can't-eat-own-egg + egg raid, **guaranteed arrival egg (uneatable +
+cap-exempt) + worldgen `arrivals` (ego live, others as eggs) + egg-based reseed floor**,
+**sky-drop chicken (unsensed/uneatable in flight → lands → huntable)**, starvation, population cap,
+population-scaled food, chicken peck/walk/flee FSM + startle-freeze + peck-distraction, PBRS
+telescoping + set-change zeroing, stamina gate, opponent-obs preprocessing parity, `check_env`
+(single- and multi-snake), interpolation, color/ring-HUD determinism. Spread across `tests/test_torus.py`,
 `test_collision.py`, `test_snake_motion.py`, `test_multisnake.py`, `test_reproduction.py`,
 `test_chickens.py`, `test_worldgen.py`, `test_sensors.py`, `test_selfplay.py`, `test_env.py`,
 `test_config.py`, `test_interp.py`, `test_render_smoke.py`, `test_watch_smoke.py`,

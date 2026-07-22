@@ -63,6 +63,26 @@ def test_render_sensors_handle_other_body_and_egg_ray_kinds():
     r.close()
 
 
+def test_render_draws_arriving_chicken_through_the_whole_drop():
+    # Goal 2: a chicken FALLING from the sky (world.arriving) must render at every height without
+    # raising -- fade-in near the top, shrink-toward-the-ground, the growing/darkening drop-shadow
+    # (bucketed), and the wing-flap frames all get exercised by sweeping the descent timer -- then a
+    # landing dust puff. Uses the dedicated fall sheet when present, degrades to the run/static/
+    # procedural fallbacks when not (so it passes with or without assets).
+    w = generate_world(CFG, seed=2, size=(120.0, 120.0), n_snakes=2)
+    w._add_chicken([60.0, 60.0], arriving=True)
+    assert len(w.arriving["pos"]) == 1
+    r = Renderer(scale=4)
+    r._clock_override = 0.0
+    for timer in (CFG.chicken_arrive_steps, CFG.chicken_arrive_steps // 2, 2, 1):
+        w.arriving["timer"][:] = timer         # top-of-drop -> mid -> just before touchdown
+        r._clock_override += 0.15              # advance flap/wobble
+        r.draw(w)                              # must not raise at any height
+    r.spawn_land(np.array([60.0, 60.0]))       # landing puff particles
+    r.draw(w)
+    r.close()
+
+
 def test_render_sensors_handle_corpse_ray_kind():
     # Force a ray to hit a corpse (kind 5) -- KeyErrors if RAY_KIND isn't extended for it.
     from snake_rl.sensors import vision_distances

@@ -38,6 +38,20 @@ def test_generate_world_multi_snake_spread():
             assert torus_dist(heads[i][None], heads[j], w.size)[0] > 2.0
 
 
+def test_generate_world_arrivals_ego_live_others_as_eggs():
+    # Goal 1: with arrivals=True only the ego (id 0) is a LIVE snake at step 0; every OTHER snake
+    # ARRIVES via a guaranteed egg (owner -1), placed spread-out where a snake would have spawned.
+    w = generate_world(CFG, seed=7, size=(140.0, 140.0), n_snakes=4, arrivals=True)
+    assert len(w.snakes) == 1 and w.snakes[0].alive and w.snakes[0].id == 0
+    owner = w.eggs["owner"]
+    assert int((owner[:, 0] < 0).sum()) == 3                    # 3 guaranteed arrival eggs (n_snakes - 1)
+    assert w.chicken_sky is True                                # runtime chickens will drop from the sky
+    pts = np.vstack([w.eggs["pos"], w.snakes[0].head_uw[None]])  # eggs + ego spread apart
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            assert torus_dist(pts[i][None], pts[j], w.size)[0] > 2.0
+
+
 def test_generate_world_default_is_single_and_centered():
     from snake_rl.worldgen import generate_world
     from snake_rl.config import CFG

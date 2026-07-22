@@ -49,6 +49,23 @@ def test_egg_hatches_into_new_snake():
     assert w.eggs["pos"].shape[0] == 0
 
 
+def test_spawn_egg_is_uneatable_and_hatches_even_at_population_cap():
+    # Goal 1: a spawn_egg (owner -1) is a GUARANTEED arrival -- no snake can eat it, and it hatches
+    # even when the population is already at n_max (a repro egg would be cap-dropped there).
+    from snake_rl.worldgen import generate_world
+    w = generate_world(CFG, seed=15, size=(150.0, 150.0), n_snakes=CFG.n_max)   # n_max LIVE snakes
+    assert len(w.snakes) == CFG.n_max
+    ego = w.snakes[0]; ego.energy = 10.0
+    w.spawn_egg(ego.head.copy())                       # sits right on the ego's head
+    assert w.try_eat() == 0                            # nobody eats a spawn egg (owner -1)...
+    assert w.eggs["pos"].shape[0] == 1 and ego.energy == 10.0
+    w.eggs["timer"][:] = 1                             # about to hatch
+    n0 = len(w.snakes)
+    owners = w._hatch_eggs()
+    assert len(w.snakes) == n0 + 1                     # ...and it hatches despite pop == n_max (cap-exempt)
+    assert owners == []                                # a spawn hatch is NOT reproduction -> pays nothing
+
+
 def test_parent_cannot_eat_own_egg_but_rival_can():
     w = World(CFG, seed=8, size=(80.0, 80.0))
     ego = w.snakes[0]; ego.id = 0; ego.head = np.array([40.0, 40.0]); ego.energy = 10.0

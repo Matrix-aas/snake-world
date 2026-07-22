@@ -33,6 +33,10 @@ class Config:
     chicken_walk_min: int = 18
     chicken_walk_max: int = 45
     chicken_startle_steps: int = 4   # entering flee: FREEZE (speed 0) for this many steps, then bolt at v_flee
+    chicken_arrive_steps: int = 12   # a spawned chicken DROPS FROM THE SKY over this many steps (falling +
+                                     # growing shadow) before it lands and becomes a real, huntable/sensed
+                                     # chicken. Purely a spawn presentation: in-flight chickens live in a
+                                     # separate world.arriving array, so sensors/eat never see them (Goal 2).
     chicken_radius: float = 1.0
     spawn_period: int = 90           # avg steps between random spawns between min and max
     # food, population-scaled (rates; Task 9 derives the live target from snake count)
@@ -104,9 +108,25 @@ class Config:
     reward_eat: float = 10.0
     reward_repro: float = 12.0
     reward_death: float = -10.0
+    # Obstacle death costs MORE than other deaths (Pitfall 16): chasing a chicken flanked by rocks
+    # is a +EV gamble under a flat -10 (a +10 catch outweighs a 30%-ish crash risk), so the reward-
+    # optimal policy crashes on purpose and PBRS (policy-invariant) can't undo that — only a heavier
+    # crash cost flips the gamble negative-EV. Cause-specific so predation/self/starve stay at -10
+    # (we don't want to further suppress cut-off aggression, only the plow-into-rocks behavior).
+    reward_death_obstacle: float = -20.0
     step_penalty: float = 0.01
     dash_penalty: float = 0.0        # dashing is rationed by the stamina reserve itself (gate + slow regen),
                                      # so no extra reward penalty is needed (one over-suppresses hunting)
+    # obstacle-avoidance shaping (PBRS): a potential well around obstacles gives a continuous
+    # steer-away gradient the sparse -reward_death alone never provided (snakes plowed into rocks
+    # ~37% of deaths, because the chicken-seeking PBRS pulls straight through obstacles). PBRS is
+    # policy-invariant, so this cannot collapse hunting the way a raw per-step penalty does (Pitfall 1).
+    obs_avoid_weight: float = 0.7    # depth of the well at the lethal surface (obstacle_r + head_radius).
+                                     # 0.7 (was 1.5): 1.5 on an interrupted resume over-suppressed
+                                     # aggression (cut-off kills -71%, catch -21%) while only cutting
+                                     # obstacle-hazard -20%; ~0.5x the chicken-potential magnitude keeps
+                                     # avoidance without globally timid play (retuned per Pitfall 16).
+    obs_avoid_range: float = 8.0     # head-surface->obstacle-surface distance the well is felt within (0 beyond)
     catch_slack_k: float = 1.5
 
     @property

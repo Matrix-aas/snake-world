@@ -36,16 +36,24 @@ def test_persistent_world_does_not_reset_on_non_ego_death():
     assert victim not in w.snakes                   # a dead non-ego opponent is pruned, not reset
 
 
-def test_reseed_floor_keeps_population_above_the_sustain_floor():
-    # Screensaver guarantee: wipe out the whole population and step once -- _step_world (via
-    # _reseed_floor) must top it back up to n_start_min rather than leaving the world empty.
+def test_reseed_floor_lays_arrival_eggs_that_hatch_to_the_floor():
+    # Screensaver guarantee (Goal 1): wipe out the whole population; _step_world (via _reseed_floor)
+    # now tops the world back up with GUARANTEED ARRIVAL EGGS (owner -1) rather than popping snakes in.
+    # Invariant every step: live snakes PLUS pending arrival eggs covers the floor; and those eggs
+    # really do hatch into live snakes (so it's not just eggs forever).
     w = generate_world(CFG, seed=9, size=(140.0, 140.0), n_snakes=CFG.n_start_min)
     ctrl = OpponentController(CFG)          # unsynced -> straight-line actor, deterministic
     for s in w.snakes:
         s.alive = False
     assert sum(1 for s in w.snakes if s.alive) == 0
-    _step_world(w, ctrl)
-    assert sum(1 for s in w.snakes if s.alive) >= CFG.n_start_min
+    ever_live_at_floor = False
+    for _ in range(CFG.egg_timer * 2):
+        _step_world(w, ctrl)
+        live = sum(1 for s in w.snakes if s.alive)
+        pending = int((w.eggs["owner"][:, 0] < 0).sum()) if len(w.eggs["owner"]) else 0
+        assert live + pending >= CFG.n_start_min          # arrivals guaranteed (live or still in-egg)
+        ever_live_at_floor = ever_live_at_floor or live >= CFG.n_start_min
+    assert ever_live_at_floor                              # the arrival eggs really hatch to the floor
 
 
 def test_reseed_floor_is_a_noop_above_the_floor():

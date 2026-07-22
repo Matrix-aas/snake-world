@@ -3,8 +3,14 @@ import numpy as np
 from .world import World, Snake, wrap, torus_dist
 
 
-def generate_world(cfg, seed=None, size=None, n_snakes=1):
+def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False):
+    """`arrivals=True` (viewer / training world): non-ego snakes ARRIVE via a guaranteed egg that
+    hatches a few steps in, and runtime chickens DROP FROM THE SKY (world.chicken_sky), rather than
+    popping in (Goals 1 & 2). The ego (snake 0) is ALWAYS a live snake from step 0 -- SnakeEnv drives
+    it and can't steer an inert egg. `arrivals=False` (default) keeps the plain instant spawn for unit
+    fixtures. Initial chickens land instantly either way, so episode-start food is available at once."""
     w = World(cfg, seed=seed, size=size)                 # fixed size (e.g. screen-fit) or random
+    w.chicken_sky = arrivals
     rng = w.rng
     # scale obstacle count with area when an explicit size is given, to keep density ~constant
     ref = ((cfg.world_size_min + cfg.world_size_max) / 2) ** 2
@@ -34,13 +40,26 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1):
                     placed.append(p); break
             else:
                 placed.append(w._free_point(cfg.head_radius))
-        w.snakes = [Snake(head_uw=p.copy(), head=wrap(p, w.size),
-                          heading=float(rng.uniform(0, 2 * np.pi)), path_uw=[p.copy()],
-                          target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
-                          _prev_head_uw=p.copy(), id=i, color_seed=i) for i, p in enumerate(placed)]
-        w._next_snake_id = n_snakes
-    # initial chickens (population ceiling, not the single-snake target rate)
+        if arrivals:
+            # ego is live from step 0 (SnakeEnv drives it); every OTHER snake ARRIVES via a
+            # guaranteed egg (staggered hatch so they don't all pop at once), ids assigned at hatch.
+            p0 = placed[0]
+            w.snakes = [Snake(head_uw=p0.copy(), head=wrap(p0, w.size),
+                              heading=float(rng.uniform(0, 2 * np.pi)), path_uw=[p0.copy()],
+                              target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
+                              _prev_head_uw=p0.copy(), id=0, color_seed=0)]
+            w._next_snake_id = 1
+            for p in placed[1:]:
+                w.spawn_egg(p, timer=int(rng.integers(cfg.egg_timer // 2, cfg.egg_timer + 1)))
+        else:
+            w.snakes = [Snake(head_uw=p.copy(), head=wrap(p, w.size),
+                              heading=float(rng.uniform(0, 2 * np.pi)), path_uw=[p.copy()],
+                              target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
+                              _prev_head_uw=p.copy(), id=i, color_seed=i) for i, p in enumerate(placed)]
+            w._next_snake_id = n_snakes
+    # initial chickens land instantly (arriving=False) so there's food at episode start regardless of
+    # the sky-drop presentation, which applies to RUNTIME spawns (population ceiling, not the target rate)
     k = int(rng.integers(1, cfg.chicken_ceiling + 1))
     for _ in range(k):
-        w.maybe_spawn_forced()
+        w.maybe_spawn_forced(arriving=False)
     return w

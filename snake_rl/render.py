@@ -29,6 +29,7 @@ ASSET_FILES = {
     "chicken_peck": ["chicken_peck_0.png", "chicken_peck_1.png", "chicken_peck_2.png", "chicken_peck_3.png"],
     "chicken_walk": ["chicken_walk_0.png", "chicken_walk_1.png", "chicken_walk_2.png", "chicken_walk_3.png"],
     "chicken_run": ["chicken_run_0.png", "chicken_run_1.png", "chicken_run_2.png", "chicken_run_3.png"],
+    "chicken_fall": ["chicken_fall_0.png", "chicken_fall_1.png", "chicken_fall_2.png", "chicken_fall_3.png"],
     "corpse": "corpse.png",
     "blood": ["blood1.png", "blood2.png"],
     "egg": "egg.png",
@@ -62,7 +63,19 @@ CHICK_ANIM = {0: ("chicken_peck", 6.0, 4), 1: ("chicken_walk", 7.0, 4), 2: ("chi
 # gore palettes (procedural particles)
 BLOOD = [(150, 12, 14), (176, 22, 20), (120, 8, 12), (198, 44, 36)]
 GORE = [(128, 34, 28), (96, 22, 20), (150, 60, 48), (74, 16, 16)]   # flesh / gut bits
-DUST = [(196, 186, 156), (176, 166, 138), (210, 200, 172)]          # dash kick
+DUST = [(196, 186, 156), (176, 166, 138), (210, 200, 172)]          # dash kick / landing puff
+# sky-drop chicken arrival (Goal 2) -- all render-only tuning. Depth is carried mostly by the SHRINK
+# + the growing shadow (top-down); the vertical offset is a small parallax that closes to 0 on land
+# (a large one just reads as a hen hovering high above its shadow).
+CHICK_FALL_TINT = (255, 233, 186)   # multiply-tint mapping the white fall art -> the landed hen's cream
+ARRIVE_FALL = 5.0        # world-units the hen is drawn ABOVE its landing shadow when it first appears
+FALL_ZOOM = 0.85         # extra scale up high (nearer the overhead camera) -> recedes to 1x on the ground
+FALL_FADEIN = 0.12       # brief fade-in as it enters from the sky (no hard pop), then solid for the drop
+FALL_FLAP_FPS = 9.0      # wing-flap sheet playback while falling
+FALL_WOBBLE_DEG = 14.0   # side-to-side rock amplitude as it flutters down
+FALL_WOBBLE_HZ = 2.6     # rock speed (wall-clock driven)
+FALL_SMOOTH = 0.2        # per-frame damped-follow of the drop (the sim ticks ~10Hz but we draw ~60fps,
+                         # so ease the discrete per-tick prog into a smooth glide instead of stair-steps)
 SHELL = [(234, 224, 198), (212, 198, 166), (196, 182, 150)]         # egg shards
 
 
@@ -106,6 +119,7 @@ class Renderer:
         self._sprite_cache = {}
         self._assets = {}
         self._chick_scale = {}     # per-chicken-sheet body-size normalization (see _load_assets)
+        self._arrivals = {}        # sky-drop render state per bird: {pos_key: {"prog": smoothed 0..1}}
         self._ground_surf = None
 
     # --- setup / assets ---
@@ -150,7 +164,7 @@ class Renderer:
         MOST COMPACT frame (wings tucked ~= body only), so run scales up to match (its wings stay
         proportionally bigger, which suits a panicked flee). Self-calibrating: survives regeneration."""
         refs = {}
-        for key in ("chicken_peck", "chicken_walk", "chicken_run"):
+        for key in ("chicken_peck", "chicken_walk", "chicken_run", "chicken_fall"):
             frames = self._assets.get(key)
             if frames:
                 refs[key] = min(self._alpha_maxdim(f) for f in frames)
@@ -401,6 +415,76 @@ class Renderer:
             pygame.draw.circle(self.canvas, EYE, self._p(p + d * cr * 0.3 + perp * cr * 0.35),
                                max(1, int(cr * 0.2 * self._scale)))
 
+    def _drop_shadow(self, pos, r_px, prog):
+        """Ground shadow of a falling object: high up it's small, faint and soft; as `prog`->1 it
+        GROWS (r_px is passed in bigger), DARKENS and SHARPENS (harder edge) up to touchdown."""
+        r_px = max(2, int(r_px))
+        hard = 0.3 + 0.7 * float(np.clip(prog, 0.0, 1.0))               # darkness + edge sharpness
+        key = ("dropshadow", r_px, round(hard, 1))
+        s = self._sprite_cache.get(key)
+        if s is None:
+            s = pygame.Surface((2 * r_px, 2 * r_px), pygame.SRCALPHA)
+            exp = 2.0 - 1.3 * hard                                      # soft(2.0) up high -> hard(0.7) edge
+            for rr in range(r_px, 0, -1):
+                a = int(150 * hard * (1 - rr / r_px) ** exp)
+                pygame.draw.circle(s, (0, 0, 0, a), (r_px, r_px), rr)
+            s = s.convert_alpha()
+            self._sprite_cache[key] = s
+        self._blit_world(s, pos)
+
+    def _draw_arrivals(self, world):
+        """Chickens dropping in from the sky (world.arriving): a top-down hen that FALLS with gravity
+        (ease-in), flapping its wings and rocking as it flutters, SHRINKING toward the ground plane
+        (it started nearer the overhead camera), pointing its head a stable RANDOM way, over a
+        drop-shadow that grows/darkens/sharpens up to touchdown -- then a dust puff (spawn_land, fired
+        from watch on the real landing). The discrete per-sim-tick descent is damped-followed into a
+        smooth glide (FALL_SMOOTH). In-flight birds are separate from world.chicken_pos, so they're
+        not huntable/sensed until they land (Goal 2). Kept subtle -- it's a screensaver."""
+        arr = world.arriving
+        seen = set()
+        if len(arr["pos"]):
+            cr = world.cfg.chicken_radius
+            steps = max(1, world.cfg.chicken_arrive_steps)
+            base_diam = 3.4 * cr * self._scale
+            rp0 = max(2.0, cr * self._scale)
+            heads = arr.get("head")                                    # world.py may carry the landing heading
+            for i, (pos, timer) in enumerate(zip(arr["pos"], arr["timer"])):
+                p = wrap(pos, world.size)
+                key = (round(float(pos[0]), 2), round(float(pos[1]), 2))   # a falling bird is stationary in x/y
+                seen.add(key)
+                target = 1.0 - timer / steps                          # 0 high in the sky -> 1 landed
+                st = self._arrivals.get(key)
+                if st is None:
+                    st = self._arrivals[key] = {"prog": target}       # first sighting: start exact, then glide
+                st["prog"] += (target - st["prog"]) * FALL_SMOOTH     # smooth the per-tick step into a glide
+                prog = float(np.clip(st["prog"], 0.0, 1.0))
+                # head direction: use world's landing heading if it ever carries one (then the fall
+                # matches the landed hen); else a stable per-position pseudo-random angle (varied, not
+                # all head-up, and steady across the whole fall).
+                head = (float(heads[i]) if heads is not None and i < len(heads)
+                        else float((pos[0] * 0.7 + pos[1] * 1.3) % (2 * np.pi)))
+                self._drop_shadow(p, rp0 * (0.5 + 0.9 * prog), prog)  # true ground spot: grows toward land
+                up = ARRIVE_FALL * (1.0 - prog * prog) * self._scale  # ease-in (gravity) descent, screen px
+                depth = 1.0 + FALL_ZOOM * (1.0 - prog)                # bigger up high -> recedes to 1x
+                phase = p[0] * 1.9 + p[1] * 1.1                       # per-bird desync (flap + wobble)
+                wob = FALL_WOBBLE_DEG * float(np.sin(self._clock * FALL_WOBBLE_HZ + phase))   # flutter rock
+                angle = float(np.degrees(head)) + 90.0 + wob         # +90: the fall art faces "up", not +X
+                flap = self._anim_frame(4, FALL_FLAP_FPS, phase)
+                s = (self._sprite("chicken_fall", base_diam * depth * self._chick_scale.get("chicken_fall", 1.0),
+                                  angle=angle, variant=flap, tint=CHICK_FALL_TINT)   # -> the LANDED hen's cream
+                     or self._sprite("chicken_run", base_diam * depth * self._chick_scale.get("chicken_run", 1.0),
+                                     angle=angle, variant=flap)       # wings-spread flap fallback
+                     or self._sprite("chicken", base_diam * depth, angle=angle))
+                if s is not None:
+                    if prog < FALL_FADEIN:                            # enters from the sky -> fade in, no pop
+                        s = _faded(s, int(255 * prog / FALL_FADEIN))
+                    self._blit_world(s, p, off=(0, -up))
+                else:
+                    self._circle(CHICK, p + np.array([0.0, -up / self._scale]), int(rp0 * depth))
+        for k in list(self._arrivals):                               # forget landed / gone birds
+            if k not in seen:
+                del self._arrivals[k]
+
     def _draw_snake(self, world, snake, body_uw, big=False):
         n = len(body_uw)
         hr = world.cfg.head_radius
@@ -487,6 +571,15 @@ class Renderer:
                                     np.cos(a) * sp, np.sin(a) * sp, 0, int(rng.integers(14, 26)),
                                     rng.uniform(0.16, 0.30), SHELL[int(rng.integers(0, len(SHELL)))], 0.03, 0.0])
         self._transient.append(["egg_cracked", float(pos[0]), float(pos[1]), 0, 22])
+
+    def spawn_land(self, pos):
+        """A sky-dropped chicken touched down: a small, low dust puff kicked outward (Goal 2)."""
+        rng = np.random.default_rng(int(self._t * 61 + pos[0] * 17 + pos[1] * 23))
+        for _ in range(6):
+            a = rng.uniform(0, 2 * np.pi); sp = rng.uniform(0.15, 0.5)
+            self._particles.append([float(pos[0]), float(pos[1]),
+                                    np.cos(a) * sp, np.sin(a) * sp - 0.05, 0, int(rng.integers(10, 20)),
+                                    rng.uniform(0.12, 0.24), DUST[int(rng.integers(0, len(DUST)))], 0.0, 0.015])
 
     def _blood_burst(self, pos, n, smin, smax, lmin, lmax):
         rng = np.random.default_rng(int(self._t * 97 + pos[0] * 31 + pos[1] * 17))
@@ -578,7 +671,7 @@ class Renderer:
 
     def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None):
         """Composite the scene in depth order: ground -> obstacles -> blood decals -> corpses ->
-        eggs -> chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
+        eggs -> chickens -> sky-dropping chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
         `bodies`: optional {snake_id: interpolated unwrapped body polyline}. `follow_id`: which
         snake gets the larger ring HUD + sensor overlay (defaults to slot-0)."""
         self._t += 1
@@ -594,6 +687,7 @@ class Renderer:
         self._draw_eggs(world)
         self._draw_transient(world)
         self._draw_chickens(world, chick_pos, chick_dir)
+        self._draw_arrivals(world)                                   # sky-dropping chickens (Goal 2)
         follow = follow_id if follow_id is not None else world.snakes[0].id
         sensor_snake = None
         for s in world.snakes:

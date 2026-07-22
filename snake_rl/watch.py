@@ -7,7 +7,7 @@ from stable_baselines3 import PPO
 from .config import CFG
 from .train import build_vec
 from .render import Renderer
-from .world import wrap, torus_delta, Snake
+from .world import wrap, torus_delta
 from .worldgen import generate_world
 from .selfplay import OpponentController
 from .sensors import OBS_DIM
@@ -66,30 +66,29 @@ def _new_ecosystem(model_path, seed, world_size=None):
     controller.sync(sd, obs_rms, clip_obs, epsilon)
     rng = np.random.default_rng(seed)
     n0 = int(rng.integers(CFG.n_start_min, CFG.n_start_max + 1))
-    world = generate_world(CFG, seed=seed, size=world_size, n_snakes=n0)
+    world = generate_world(CFG, seed=seed, size=world_size, n_snakes=n0, arrivals=True)
     return model, controller, world
 
 
 def _reseed_floor(world, controller):
-    """Screensaver guarantee: a persistent world never resets, so a bad run of deaths can empty
-    it for good. If the live population falls below the sustain floor (cfg.n_start_min), spawn
-    fresh snake(s) -- placed like worldgen's initial multi-snake spawn via `_free_point`, driven
-    by the SAME synced brain -- to bring it back up to the floor. A no-op above the floor, so
-    natural birth/death dynamics dominate whenever the population is healthy."""
+    """Screensaver guarantee: a persistent world never resets, so a bad run of deaths can empty it
+    for good. If live snakes PLUS pending arrival eggs fall below the sustain floor (cfg.n_start_min),
+    lay fresh guaranteed arrival egg(s) -- placed like worldgen's spread spawn via `_free_point` --
+    that hatch (via the SAME synced brain) into full snakes a few steps later, so even a reseed
+    ARRIVES via an egg rather than popping in (Goal 1). Pending eggs count toward the floor so we lay
+    exactly enough, not one per step while they incubate. A no-op above the floor, so natural
+    birth/death dynamics dominate whenever the population is healthy. (`controller` unused now: a
+    hatchling's ring is created zeroed on its first `act`, and _step_world resets rings on death.)"""
     c = world.cfg
-    n_alive = sum(1 for s in world.snakes if s.alive)
-    while n_alive < c.n_start_min:
-        p = world._free_point(c.head_radius)
-        sid = world._next_snake_id
-        world._next_snake_id += 1
-        world.snakes.append(Snake(
-            head_uw=p.copy(), head=wrap(p, world.size),
-            heading=float(world.rng.uniform(0, 2 * np.pi)), path_uw=[p.copy()],
-            target_length=c.start_length, stamina=c.s_max, energy=c.energy_max,
-            _prev_head_uw=p.copy(), id=sid, color_seed=sid,
-        ))
-        controller.reset_snake(sid)     # fresh ring, not a stale/reused one
-        n_alive += 1
+
+    def deficit():
+        n_alive = sum(1 for s in world.snakes if s.alive)
+        owner = world.eggs["owner"]
+        n_pending = int((owner[:, 0] < 0).sum()) if len(owner) else 0     # unhatched arrival eggs
+        return c.n_start_min - (n_alive + n_pending)
+
+    while deficit() > 0:
+        world.spawn_egg(world._free_point(c.head_radius))
 
 
 def _step_world(world, controller):
@@ -134,10 +133,13 @@ def _emit_gore(renderer, before, world):
     snake, not just the ego): a chicken that vanished -> eat burst + decal; a new corpse -> death
     burst + decal; a newly-alive snake id -> egg-hatch shell crack."""
     ch_before, corpses_before, ids_before = before
-    ch_now = {int(i) for i in world.chicken_id}
+    ch_now = {int(i): world.chicken_pos[k].copy() for k, i in enumerate(world.chicken_id)}
     for cid, pos in ch_before.items():
         if cid not in ch_now:
             renderer.spawn_eat(pos)
+    for cid, pos in ch_now.items():
+        if cid not in ch_before:
+            renderer.spawn_land(pos)                              # a sky-dropped chicken touched down
     for p in world.corpses["pos"]:
         if (round(float(p[0]), 2), round(float(p[1]), 2)) not in corpses_before:
             renderer.spawn_death(p.copy())
@@ -307,7 +309,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         seed += 1
                         world = generate_world(CFG, seed=seed, size=world_size,
                                                n_snakes=int(np.random.default_rng(seed).integers(
-                                                   CFG.n_start_min, CFG.n_start_max + 1)))
+                                                   CFG.n_start_min, CFG.n_start_max + 1)),
+                                               arrivals=True)
                         controller.reset_all()
                         follow_id = world.snakes[0].id
                         prev_bodies, prev_ch = cur_bodies, cur_ch = snapshot(world); since = 0.0

@@ -54,29 +54,37 @@ def test_bootstrap_acts_straight_before_sync():
 
 
 def test_env_spawns_multiple_snakes():
+    # arrivals=True: the ego is live at step 0, every OTHER snake ARRIVES via a guaranteed egg, so the
+    # INTENDED start population = live ego + pending arrival eggs (owner -1) must be in [min, max].
     from snake_rl.env import SnakeEnv
     env = SnakeEnv(seed=0)
     for _ in range(6):
         env.reset()
-        n = len(env.world.snakes)
-        assert CFG.n_start_min <= n <= CFG.n_start_max
+        live = sum(1 for s in env.world.snakes if s.alive)
+        owner = env.world.eggs["owner"]
+        pending = int((owner[:, 0] < 0).sum()) if len(owner) else 0
+        assert live == 1                                       # only the ego is a live snake at reset
+        assert CFG.n_start_min <= live + pending <= CFG.n_start_max
 
 
 def test_opponents_move_and_reward_finite():
+    # Opponents ARRIVE via hatching eggs (arrivals=True): track them by id across steps -- once an
+    # egg hatches its snake is driven and must move; reward stays finite the whole time.
     from snake_rl.env import SnakeEnv
-    env = SnakeEnv(seed=1)
-    env.reset()
-    before = np.array([s.head_uw.copy() for s in env.world.snakes[1:]])
+    env = SnakeEnv(seed=1); env.reset()
+    env.world.obstacle_pos = np.zeros((0, 2)); env.world.obstacle_r = np.zeros((0,))   # keep the ego alive
+    seen = {}
     moved = False
-    for _ in range(40):
+    for _ in range(CFG.egg_timer * 2 + 20):
         _, r, term, trunc, _ = env.step([1, 0])
         assert np.isfinite(r)
+        for s in env.world.snakes[1:]:
+            if s.id in seen and np.linalg.norm(s.head_uw - seen[s.id]) > 1e-6:
+                moved = True
+            seen[s.id] = s.head_uw.copy()
         if term or trunc:
             break
-    after = np.array([s.head_uw.copy() for s in env.world.snakes[1:len(before) + 1]])
-    if len(before) and len(after):
-        moved = bool(np.any(np.linalg.norm(after - before, axis=1) > 1e-6))
-    assert moved
+    assert moved                                               # at least one hatched opponent actually moved
 
 
 def test_repro_reward_only_on_ego_hatch():
@@ -109,8 +117,14 @@ def test_repro_reward_only_on_ego_hatch():
     r_non = run_hatch([1, 2])                          # non-ego egg hatches -> pays nothing
     assert abs((r_ego - r_non) - CFG.reward_repro) < 1e-6
 
-    # an ego-owned egg RAIDED (eaten by an opponent, never hatches) pays nothing == no egg at all
+    # an ego-owned egg RAIDED (eaten by an opponent, never hatches) pays nothing == no egg at all.
+    # arrivals=True means opponents start as eggs, so add a live opponent for the egg to sit on.
     env, w = base_env()
+    from snake_rl.world import Snake, wrap
+    oh = np.array([50.0, 50.0])
+    w.snakes.append(Snake(head_uw=oh.copy(), head=wrap(oh, w.size), heading=0.0, path_uw=[oh.copy()],
+                          target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
+                          _prev_head_uw=oh.copy(), id=1))
     w.eggs = {"pos": w.snakes[1].head.copy()[None],   # sits on opponent 1 -> foreign -> eaten next step
               "timer": np.array([45.0]), "owner": np.array([[0, 99]])}
     r_raided = env.step([1, 0])[1]

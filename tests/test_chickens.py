@@ -179,6 +179,23 @@ def test_chicken_never_enters_obstacle():
         assert d >= w.obstacle_r[0] + CFG.chicken_radius - 1e-6   # blocked at the rock surface, never inside
 
 
+def test_chicken_arrives_from_sky_before_it_is_huntable_and_sensed():
+    # Goal 2: a spawned chicken first FALLS from the sky (world.arriving) -- invisible to eat + vision
+    # -- then LANDS into the real chicken arrays after chicken_arrive_steps, becoming a normal chicken.
+    from snake_rl.sensors import observe
+    w = World(CFG, seed=1, size=(60, 60))
+    w.head = np.array([30.0, 30.0]); w.head_uw = w.head.copy()
+    w._add_chicken([30.5, 30.0], arriving=True)               # drops right by the snake's head
+    assert len(w.chicken_pos) == 0 and len(w.arriving["pos"]) == 1   # in flight, not a real chicken yet
+    assert w.try_eat() == 0                                   # can't eat a chicken still in the air
+    is_chicken = observe(w)[:63].reshape(9, 7)[:, 2]          # per-ray is_chicken one-hot
+    assert not is_chicken.any()                               # ...and no vision ray reports it
+    for _ in range(CFG.chicken_arrive_steps):                 # let it fall all the way down
+        w._land_arrivals()
+    assert len(w.arriving["pos"]) == 0 and len(w.chicken_pos) == 1   # landed -> a real chicken
+    assert w.try_eat() == 1                                   # now catchable on the snake's doorstep
+
+
 def test_nearest_chicken():
     w = World(CFG, seed=1, size=(60, 60)); w.head = np.array([1.0, 1.0])
     w.set_chickens([[59.0, 1.0], [5.0, 1.0]])

@@ -107,6 +107,12 @@ class World:
         self.chicken_timer = np.zeros((0,), dtype=int)
         self.chicken_startle = np.zeros((0,), dtype=int)
         self._next_chicken_id = 0
+        # chickens DROP FROM THE SKY (Goal 2): a spawned chicken first spends chicken_arrive_steps
+        # here, falling, then lands into the real chicken_* arrays. Kept SEPARATE from chicken_pos so
+        # sensors/eat (which read chicken_pos) never see an in-flight bird. sky=True in the viewer /
+        # training world (worldgen `arrivals=True`); False keeps the plain instant-spawn for unit fixtures.
+        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int)}
+        self.chicken_sky = False
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
@@ -228,7 +234,13 @@ class World:
             return 0, int(self.rng.integers(c.chicken_peck_min, c.chicken_peck_max + 1))
         return 1, int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
 
-    def _add_chicken(self, p):
+    def _add_chicken(self, p, arriving=False):
+        p = np.asarray(p, float)
+        if arriving:                                     # queue a sky-drop; lands into the real arrays later
+            self.arriving["pos"] = (np.vstack([self.arriving["pos"], p[None]])
+                                    if len(self.arriving["pos"]) else p[None].copy())
+            self.arriving["timer"] = np.append(self.arriving["timer"], self.cfg.chicken_arrive_steps)
+            return
         self.chicken_pos = np.vstack([self.chicken_pos, p]) if len(self.chicken_pos) else p[None]
         self.chicken_dir = np.append(self.chicken_dir, self.rng.uniform(0, 2 * np.pi))
         self.chicken_id = np.append(self.chicken_id, self._next_chicken_id)
@@ -237,6 +249,21 @@ class World:
         self.chicken_timer = np.append(self.chicken_timer, tm)
         self.chicken_startle = np.append(self.chicken_startle, 0)
         self._next_chicken_id += 1
+
+    def _land_arrivals(self):
+        """Tick every in-flight chicken's fall; any that reached the ground lands into the real
+        chicken arrays (a normal huntable/sensed chicken from that step on). Two-phase-safe: this
+        touches no snake and resolves no death, it just turns a sky-drop into a real chicken."""
+        a = self.arriving
+        if not len(a["pos"]):
+            return
+        a["timer"] = a["timer"] - 1
+        landed = a["timer"] <= 0
+        if landed.any():
+            for p in a["pos"][landed]:
+                self._add_chicken(p, arriving=False)
+            keep = ~landed
+            a["pos"] = a["pos"][keep]; a["timer"] = a["timer"][keep]
 
     def set_chickens(self, positions):
         """Place chickens at explicit positions with fresh stable ids (setup/debug helper)."""
@@ -251,6 +278,7 @@ class World:
         self.chicken_state = sts
         self.chicken_timer = tms
         self.chicken_startle = np.zeros(n, int)
+        self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int)}   # full chicken reset
         self._next_chicken_id += n
 
     def _blocked(self, old, new):
@@ -380,6 +408,8 @@ class World:
             eater_id = s.id
             owner = self.eggs["owner"]
             foreign = (owner[:, 0] != eater_id) & (owner[:, 1] != eater_id)
+            owned = owner[:, 0] >= 0        # spawn/arrival eggs (owner -1) belong to nobody: uneatable,
+            foreign &= owned                # a GUARANTEED arrival, never scavenged before it hatches
             d = torus_dist(self.eggs["pos"], s.head, self.size)
             eaten = foreign & (d <= self.cfg.eat_radius)
             ne = int(eaten.sum())
@@ -443,23 +473,32 @@ class World:
         n_alive = max(1, sum(1 for s in self.snakes if s.alive))
         max_target = int(np.clip(round(c.chickens_per_snake_max * n_alive), 1, c.chicken_ceiling))
         min_target = int(np.clip(round(c.chickens_per_snake_min * n_alive), 1, max_target))
-        n = len(self.chicken_pos)
-        if n >= max_target:
+        n = len(self.chicken_pos) + len(self.arriving["pos"])  # in-flight birds count toward the target
+        if n >= max_target:                                    # (else we'd over-spawn while they fall)
             return
         p = 0.06 if n < min_target else 1.0 / c.spawn_period   # fast refill to min, then random to max
         if n == 0 or self.rng.random() < p:
-            self._add_chicken(self._free_point(c.chicken_radius))
+            self._add_chicken(self._free_point(c.chicken_radius), arriving=self.chicken_sky)
 
-    def maybe_spawn_forced(self):
-        self._add_chicken(self._free_point(self.cfg.chicken_radius))
+    def maybe_spawn_forced(self, arriving=False):
+        self._add_chicken(self._free_point(self.cfg.chicken_radius), arriving=arriving)
 
     # --- reproduction ---
-    def _lay_egg(self, pos, id_a, id_b):
+    def _lay_egg(self, pos, id_a, id_b, timer=None):
         e = self.eggs
         e["pos"] = np.vstack([e["pos"], pos[None]]) if len(e["pos"]) else pos[None].copy()
-        e["timer"] = np.append(e["timer"], self.cfg.egg_timer)
+        e["timer"] = np.append(e["timer"], self.cfg.egg_timer if timer is None else timer)
         row = np.array([[id_a, id_b]])
         e["owner"] = np.vstack([e["owner"], row]) if len(e["owner"]) else row
+
+    def spawn_egg(self, pos, timer=None):
+        """Lay a GUARANTEED arrival egg (owner -1 = nobody's): every new NON-ego snake ARRIVES via
+        one of these instead of popping in (Goal 1) -- used by worldgen for opponents and by the
+        viewer reseed floor. Reuses the repro egg/hatch machinery, but an owner -1 makes it
+        uneatable (_snake_eat) and n_max-cap-exempt (_hatch_eggs), and it pays no repro reward /
+        counts as no 'birth' (excluded from hatched_owners). It still renders + hatches (shell
+        crack) exactly like a normal egg."""
+        self._lay_egg(np.asarray(pos, float), -1, -1, timer=timer)
 
     def _hatch_eggs(self):
         """Returns owner-sets (frozenset of parent ids) of eggs that produced a hatchling this step."""
@@ -473,7 +512,8 @@ class World:
         if hatch.any():
             n_alive = sum(1 for s in self.snakes if s.alive)
             for i in np.nonzero(hatch)[0]:
-                if n_alive >= c.n_max:
+                is_spawn = e["owner"][i][0] < 0        # guaranteed arrival egg: bypasses the n_max cap
+                if n_alive >= c.n_max and not is_spawn:
                     continue
                 pos = e["pos"][i].copy()
                 sid = self._next_snake_id
@@ -485,7 +525,8 @@ class World:
                     id=sid, color_seed=sid,
                 ))
                 n_alive += 1
-                hatched_owners.append(frozenset(int(x) for x in e["owner"][i]))
+                if not is_spawn:                       # only real matings pay repro reward / count as births
+                    hatched_owners.append(frozenset(int(x) for x in e["owner"][i]))
             keep = ~hatch
             e["pos"] = e["pos"][keep]; e["timer"] = e["timer"][keep]; e["owner"] = e["owner"][keep]
         return hatched_owners
@@ -590,6 +631,7 @@ class World:
         deaths = [s.id for s, _ in dying]
         deaths_detailed = [(s.id, cause) for s, cause in dying]
         # phase 3: chickens, eat, energy decay, starvation, spawn, mating, hatching (every live snake)
+        self._land_arrivals()                 # sky-dropped chickens that reached the ground become real
         self.update_chickens()
         ate = self.try_eat()
         self.decay_energy()
