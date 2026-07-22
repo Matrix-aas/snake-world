@@ -384,6 +384,14 @@ Every one of these cost real training runs (some cost more than one). Do not red
     a fresh retrain. Capping at 1× keeps max alert = today's `r_flee`, so hunting still bootstraps and
     catch-invariant #3 stays valid. The snake also senses its **own speed** (proprio idx 112) to
     reason about its turn radius.
+    **v2.1 — speed also drives STAMINA regen:** `regen = stamina_regen·(1 − speed_fraction)` — full at
+    a dead stop (speed_idx 0), zero at full cruise (speed_idx 3); dash still drains. So standing still
+    *both* ambushes *and* recharges the dash reserve fastest — one choice pays off twice, turning ambush
+    into a real resource strategy (pause to bank stamina, then dash-hunt). A dynamics change (not
+    observed — Pitfall 12), re-tuned by a **resume**: perception/motor/hunting/breeding skills transfer
+    unchanged; only *when-to-dash-vs-pause* is re-learned. Expect a transient dip → recovery (the
+    peck-distraction path needs no dash, so it can't fully collapse). Paired with a faster hunger
+    (`energy_decay 0.20`) in the same resume.
     **The speed-scaled alert opens a degenerate exploit — close it with FEAR PERSISTENCE.** If alert
     tracks the snake's *instantaneous* speed, a snake can spook a hen, then **stop dead** (speed 0 ⇒
     alert 0) so the hen instantly "calms" and freezes, then grab it. The policy discovers this from
@@ -428,15 +436,17 @@ solid ⇒ frozen this many steps — Pitfall 19).
 **Sensing (v2):** `n_rays 9` uniform + **`n_fwd_rays 2`** forward (RAY_COUNT 11), `fov_deg 270`,
 `ray_range 20`, `frame_stack 4` → `OBS_DIM 113` (Pitfalls 19–20).
 
-**Stamina/dash** (unchanged from the single-snake game, except `stamina_regen` — see "eased"
-below): `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curriculum
-`dash_min_stamina_easy 0.05` / `stamina_regen_easy 0.6`, `v_dash 2.0`, `r_flee 12` (walk alert).
+**Stamina/dash:** `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curriculum
+`dash_min_stamina_easy 0.05`, `v_dash 2.0`, `r_flee 12` (walk alert). **`stamina_regen 0.7`** is now the
+**speed-0 (dead-stop) regen rate**, scaled `×(1 − speed_levels[idx])` to zero at full cruise (v2.1,
+Pitfall 20); `stamina_regen_easy 0.9`. Bumped from 0.42 because cruising no longer regens at all, so a
+stop must recharge fast (~full reserve in ~43 stopped steps).
 
-**Energy / hunger:** `energy_max 100`, **`energy_decay 0.10`** (life-without-food = `energy_max/energy_decay`
-= **1000 steps**; halved from 0.05/2000 so a snake stuck sliding on its own solid body — Model A —
-starves out ~2× faster instead of lingering), `energy_refill 40` (per chicken/corpse/egg). **Runtime-safe,
-no retrain (Pitfall 12):** `energy_decay` is NOT observed (obs carries only `energy/energy_max`), so the
-trained policy just gets hungry sooner and eats sooner — it generalizes without a retrain.
+**Energy / hunger:** `energy_max 100`, **`energy_decay 0.20`** (life-without-food = `energy_max/energy_decay`
+= **500 steps**, down from 2000: 0.05→0.10→0.20). Stuck snakes clear out fast, and in a crowded/food-limited
+world it **self-regulates the population** (weak hunters starve back to the healthy 2–4 band). `energy_refill
+40` (per chicken/corpse/egg). Not observed (Pitfall 12: obs carries only `energy/energy_max`, not the rate) —
+the policy adapts via the same resume that teaches the speed-scaled stamina.
 
 **Chicken FSM:** `chicken_peck_min/max 6/18` (halved from 12/35 — shorter stationary catch window,
 Pitfall 20), `chicken_walk_min/max 18/45`, `chicken_startle_steps 4`, **`chicken_flee_persist 15`**
@@ -447,7 +457,7 @@ for this many steps (in `world.arriving`, unsensed/uneatable) before it lands (G
 
 **Reproduction / eggs / corpses (the config's current hard endpoints — the curriculum sweeps to
 these and v2 trains from scratch ON them):** `repro_energy_frac 0.7`, `repro_length_min 8.0`,
-`r_mate 7.0`, `mate_steps 2`, `repro_cost 18.0`, `repro_cooldown 80`, `stamina_regen 0.42`,
+`r_mate 7.0`, `mate_steps 2`, `repro_cost 18.0`, `repro_cooldown 80`, `stamina_regen 0.7` (speed-0 rate, v2.1),
 `egg_timer 45`, `hatch_energy_frac 0.5`, `egg_food 25.0`, `corpse_food_per_length 4.0`. Mating
 curriculum easy endpoints (swept toward the above as `hardness: 0→1`): `r_mate_easy 12.0`,
 `mate_steps_easy 1`, `repro_length_min_easy 6.0`, `stamina_regen_easy 0.6`.

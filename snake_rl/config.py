@@ -52,13 +52,15 @@ class Config:
     s_max: float = 30.0
     stamina_drain: float = 1.0
     # HARD (final) stamina: dash needs a full-unit reserve, refills slowly -> deliberate bursts.
-    # 0.42 (ecosystem-sustain tuning; v1 trained at 0.3 then eased at runtime, v2 trains on 0.42
-    # from scratch -- see CLAUDE.md history): more energy surplus for the persistent world's mating
-    # economy; still a real reserve, just less starved for it.
-    stamina_regen: float = 0.42      # refills the reserve in ~70 steps: fast enough to hunt, slow enough to matter
+    # v2.1: regen now SPEED-SCALED -- `stamina_regen` is the rate at a DEAD STOP (speed_idx 0), scaled
+    # linearly to ZERO at full cruise (speed_idx 3); dash still drains. So standing still both ambushes
+    # AND recharges the dash reserve fastest -> a real tactical trade the net must (re)learn (resume).
+    # 0.7 (bumped from 0.42): a strong stop-recharge (~full reserve in ~43 stopped steps) since cruising
+    # no longer regens at all. Not observed (obs carries stamina LEVEL, not the rate; Pitfall 12).
+    stamina_regen: float = 0.7       # regen at speed_idx 0 (stop); ×(1 - speed_levels[idx]) at cruise
     dash_min_stamina: float = 1.0    # need a full unit to enter a dash -> stamina is a real reserve to spend
     # EASY (warmup) stamina: cheap, always-available dash so the agent can first LEARN to hunt
-    stamina_regen_easy: float = 0.6
+    stamina_regen_easy: float = 0.9
     dash_min_stamina_easy: float = 0.05
     # curriculum: keep easy for the first `hardness_warmup` of training, ramp to full-hard by `hardness_full`
     hardness_warmup: float = 0.42    # longer warmup -> a stronger hunter before the reserve tightens
@@ -74,11 +76,11 @@ class Config:
                                       # clutter, weave through cover) without just killing snakes.
     # energy (hunger — not lethal)
     energy_max: float = 100.0
-    energy_decay: float = 0.10        # 0.10 (was 0.05): life-without-food HALVED (2000 -> 1000 steps)
-                                      # so a snake stuck sliding on its own solid body (Model A) starves
-                                      # out ~2x faster instead of lingering. Runtime-safe / no retrain:
-                                      # energy_decay is NOT observed (obs carries only energy/energy_max,
-                                      # Pitfall 12) -- the policy just gets hungry sooner and eats sooner.
+    energy_decay: float = 0.20        # 0.20 (0.05 -> 0.10 -> 0.20): life-without-food now 500 steps (was
+                                      # 2000). Stuck snakes clear out fast, and in a crowded/food-limited
+                                      # world it self-regulates the population (weak hunters starve back to
+                                      # the healthy 2-4 band). Not observed (Pitfall 12: obs carries only
+                                      # energy/energy_max, not the rate) -- the policy adapts via training.
     energy_refill: float = 40.0
     # snake growth / cap
     start_length: float = 6.0        # target body length (> neck-skip); the body fills in over the first few steps

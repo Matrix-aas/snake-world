@@ -36,10 +36,18 @@ def test_dash_ignored_when_stamina_empty():
     assert abs(np.linalg.norm(w.head_uw - h0) - CFG.v_snake) < 1e-6
 
 
-def test_stamina_regens_when_not_dashing():
+def test_stamina_regen_scales_with_cruise_speed():
+    # regen is speed-scaled: full at a dead stop (speed_idx 0), ZERO at full cruise (speed_idx 3),
+    # linear in between -> standing still recharges the dash reserve fastest (v2.1 ambush economy).
     w = fresh(); w.stamina = 10.0
-    w.move(3, 1, 0)
-    assert abs(w.stamina - min(CFG.s_max, 10.0 + CFG.stamina_regen)) < 1e-6
+    w.move(0, 1, 0)                                                   # stopped -> full regen
+    assert abs(w.stamina - (10.0 + CFG.stamina_regen)) < 1e-6
+    w = fresh(); w.stamina = 10.0
+    w.move(3, 1, 0)                                                   # full cruise -> zero regen
+    assert abs(w.stamina - 10.0) < 1e-6
+    w = fresh(); w.stamina = 10.0
+    w.move(1, 1, 0)                                                   # 1/3 cruise -> partial regen
+    assert abs(w.stamina - (10.0 + CFG.stamina_regen * (1 - CFG.speed_levels[1]))) < 1e-6
 
 
 def test_head_stays_wrapped():

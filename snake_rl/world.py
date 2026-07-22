@@ -176,7 +176,7 @@ class World:
             s.stun -= 1
             s.dashed = False
             s.speed = 0.0
-            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)   # reserve refills while stunned (M1)
+            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)   # stunned == a dead stop -> full (speed-0) regen
             s._prev_head_uw = s.head_uw.copy()
             s.path_uw.append(s.head_uw.copy())
             self._prune_path(s)
@@ -211,7 +211,10 @@ class World:
         if dashing:
             s.stamina = max(0.0, s.stamina - c.stamina_drain)
         else:
-            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)
+            # regen scales with the CHOSEN cruise speed: full at a dead stop (speed_idx 0), zero at
+            # full cruise (speed_idx 3). Standing still both ambushes AND recharges the dash reserve
+            # fastest -> the net must learn to pause to bank stamina (v2.1, resume-trained).
+            s.stamina = min(c.s_max, s.stamina + c.stamina_regen * (1.0 - c.speed_levels[speed_idx]))
         s.steps += 1
         s._prev_head_uw = prev_uw
         s.dashed = dashing
