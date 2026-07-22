@@ -104,11 +104,15 @@ class SaveEvery(BaseCallback):
 
 
 def train(total_steps, n_envs=16, model_path="models/snake.zip", reset=False, seed=0,
-          save_every=50000, log_every=10000, dash_penalty=None):
+          save_every=50000, log_every=10000, dash_penalty=None, curriculum_total=None):
     os.makedirs(os.path.dirname(model_path) or ".", exist_ok=True)
     norm_path = os.path.join(os.path.dirname(model_path) or ".", "vecnormalize.pkl")
     resuming = (not reset) and os.path.exists(model_path)
-    # fresh run starts easy (hardness 0) and anneals the reserve mechanic in; a resume is assumed post-curriculum
+    # A curriculum-CONTINUING resume (curriculum_total given) picks the difficulty ramp up where it
+    # left off, against the ORIGINAL schedule, using the preserved step counter -- no abrupt jump to
+    # full hardness (which would collapse learned behavior, Pitfall 2). A plain resume stays fully hard.
+    continue_curriculum = resuming and curriculum_total is not None
+    # fresh run starts easy (hardness 0) and anneals in; a plain resume is assumed post-curriculum (hard)
     hardness0 = 1.0 if resuming else 0.0
     vec = build_vec(n_envs, seed, training=True, norm_path=None if reset else norm_path,
                     dash_penalty=dash_penalty, hardness=hardness0)
@@ -121,11 +125,23 @@ def train(total_steps, n_envs=16, model_path="models/snake.zip", reset=False, se
                     gamma=CFG.gamma, gae_lambda=0.95, clip_range=0.2,   # can't adapt to late hardening.
                     ent_coef=0.01, vf_coef=0.5, max_grad_norm=0.5, target_kl=0.03,  # target_kl = stability guard
                     policy_kwargs=dict(net_arch=dict(pi=[128, 128], vf=[128, 128])))
+    # curriculum callback: fresh anneals over total_steps; a curriculum-continuing resume anneals over
+    # curriculum_total (SB3 preserves num_timesteps across resume, so f(num_timesteps/curriculum_total)
+    # continues the exact ramp); a plain resume gets no anneal (stays fully hard).
+    anneal = None
+    if not resuming:
+        anneal = AnnealHardness(total_steps, CFG.hardness_warmup, CFG.hardness_full)
+    elif continue_curriculum:
+        anneal = AnnealHardness(curriculum_total, CFG.hardness_warmup, CFG.hardness_full)
+        h_now = anneal._hardness(model.num_timesteps / max(1, curriculum_total))
+        vec.env_method("set_hardness", h_now)     # start at the continued hardness (no jump before 1st fire)
+        print(f"[resume] continuing curriculum @ {model.num_timesteps}/{curriculum_total} "
+              f"-> hardness {h_now:.3f}")
     callbacks = [EpisodeStatsCallback(log_every),
                  SyncOpponentPolicy(),          # self-play: opponents mirror the learner each rollout
                  SaveEvery(save_every, model_path, norm_path, n_envs)]
-    if not resuming:
-        callbacks.append(AnnealHardness(total_steps, CFG.hardness_warmup, CFG.hardness_full))
+    if anneal is not None:
+        callbacks.append(anneal)
     try:
         model.learn(total_timesteps=total_steps, callback=callbacks,
                     reset_num_timesteps=not resuming)

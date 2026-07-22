@@ -16,6 +16,10 @@ def main():
     t.add_argument("--log-every", type=int, default=10_000)
     t.add_argument("--dash-penalty", type=float, default=None,
                    help="override reward penalty per dash step (default 0: stamina is rationed mechanically)")
+    t.add_argument("--curriculum-total", type=int, default=None,
+                   help="resume ONLY: continue the difficulty ramp against this original total-step "
+                        "schedule (e.g. 8000000) instead of jumping straight to full hardness. The "
+                        "preserved step counter picks the ramp up where it left off.")
     w = sub.add_parser("watch")
     w.add_argument("--model", default="models/snake.zip")
     w.add_argument("--seed", type=int, default=None)
@@ -25,7 +29,8 @@ def main():
     w.add_argument("--episodes", type=int, default=5)
     a = p.parse_args()
     if a.cmd == "train":
-        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every, a.dash_penalty)
+        train(a.steps, a.envs, a.model, a.reset, a.seed, a.save_every, a.log_every, a.dash_penalty,
+              curriculum_total=a.curriculum_total)
     elif a.headless:
         run_headless(a.model, a.seed, a.episodes)
     else:
