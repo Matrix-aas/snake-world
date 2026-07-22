@@ -431,6 +431,12 @@ solid ⇒ frozen this many steps — Pitfall 19).
 below): `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curriculum
 `dash_min_stamina_easy 0.05` / `stamina_regen_easy 0.6`, `v_dash 2.0`, `r_flee 12` (walk alert).
 
+**Energy / hunger:** `energy_max 100`, **`energy_decay 0.10`** (life-without-food = `energy_max/energy_decay`
+= **1000 steps**; halved from 0.05/2000 so a snake stuck sliding on its own solid body — Model A —
+starves out ~2× faster instead of lingering), `energy_refill 40` (per chicken/corpse/egg). **Runtime-safe,
+no retrain (Pitfall 12):** `energy_decay` is NOT observed (obs carries only `energy/energy_max`), so the
+trained policy just gets hungry sooner and eats sooner — it generalizes without a retrain.
+
 **Chicken FSM:** `chicken_peck_min/max 6/18` (halved from 12/35 — shorter stationary catch window,
 Pitfall 20), `chicken_walk_min/max 18/45`, `chicken_startle_steps 4`, **`chicken_flee_persist 15`**
 (fear-persistence: a scared hen keeps bolting this many steps after the last time a snake was in

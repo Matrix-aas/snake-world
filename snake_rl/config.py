@@ -74,7 +74,11 @@ class Config:
                                       # clutter, weave through cover) without just killing snakes.
     # energy (hunger — not lethal)
     energy_max: float = 100.0
-    energy_decay: float = 0.05
+    energy_decay: float = 0.10        # 0.10 (was 0.05): life-without-food HALVED (2000 -> 1000 steps)
+                                      # so a snake stuck sliding on its own solid body (Model A) starves
+                                      # out ~2x faster instead of lingering. Runtime-safe / no retrain:
+                                      # energy_decay is NOT observed (obs carries only energy/energy_max,
+                                      # Pitfall 12) -- the policy just gets hungry sooner and eats sooner.
     energy_refill: float = 40.0
     # snake growth / cap
     start_length: float = 6.0        # target body length (> neck-skip); the body fills in over the first few steps
