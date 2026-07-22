@@ -196,7 +196,7 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5, max_steps
     """Ecosystem evaluation over a PERSISTENT multi-snake world (never reset on a death, same as
     `run_watch`): catch rate + dash usage (aggregated across every snake, inferred without touching
     world.py -- see below), and ecosystem series from `step`'s deaths_detailed/hatched_owners:
-    births, kills (cause=="snake"), starvations (cause=="starve"), obstacle/self deaths, and
+    births, kills (cause=="snake"), starvations (cause=="starve"), and
     population over time. `episodes` scales the run length (episodes * episode_horizon steps);
     `max_steps` overrides that directly (handy for fast tests). Returns the metrics dict."""
     seed = seed if seed is not None else 0
