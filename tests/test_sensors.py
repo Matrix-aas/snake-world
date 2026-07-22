@@ -2,7 +2,7 @@ import numpy as np
 from snake_rl.config import CFG
 from snake_rl.world import World, Snake, wrap
 from snake_rl.worldgen import generate_world
-from snake_rl.sensors import observe, sense_vision, smell, OBS_DIM
+from snake_rl.sensors import observe, sense_vision, smell, ray_dirs, OBS_DIM
 
 
 def straight_world():
@@ -23,10 +23,30 @@ def _add_rival(w, pos, id=1, heading=np.pi, target_length=None):
 def test_obs_shape_and_bounds():
     w = straight_world(); w.maybe_spawn_forced()
     o = observe(w)
-    assert OBS_DIM == 87
+    assert OBS_DIM == 113
     assert o.shape == (OBS_DIM,) and o.dtype == np.float32
     assert np.isfinite(o).all()
-    assert (o[:63].reshape(9, 7)[:, 0] >= 0).all() and (o[:63].reshape(9, 7)[:, 0] <= 1).all()
+    assert (o[:88].reshape(11, 8)[:, 0] >= 0).all() and (o[:88].reshape(11, 8)[:, 0] <= 1).all()
+
+
+def test_ray_dirs_count_and_forward_angles():
+    dirs = ray_dirs(CFG, 0.0)
+    assert len(dirs) == 11                                # 9 uniform + 2 forward
+    fwd = np.degrees(np.arctan2(dirs[-2:, 1], dirs[-2:, 0]))   # the two appended forward rays
+    assert abs(abs(fwd[0]) - 16.875) < 1e-6 and abs(abs(fwd[1]) - 16.875) < 1e-6
+    assert fwd[0] < 0 < fwd[1]                             # symmetric ±16.875° about heading
+
+
+def test_unmask_reports_obstacle_behind_a_nearer_chicken():
+    # chicken directly ahead, a rock just beyond it on the same forward ray: the ray's NEAREST hit is
+    # the chicken (is_chicken=1) but the un-mask channel still reports the rock < ray_range.
+    w = straight_world()
+    w.set_chickens([[35.0, 30.0]])                        # nearer, on the +x forward ray
+    w.obstacle_pos = np.array([[40.0, 30.0]]); w.obstacle_r = np.array([1.0]); w.obstacle_kind = np.array([0])
+    center = sense_vision(w)[CFG.n_rays // 2]             # exactly-forward ray
+    assert center[2] == 1.0                               # is_chicken (nearest target)
+    assert center[1] == 0.0                               # NOT reported as an obstacle by the hit one-hot
+    assert 0.0 < center[7] < 1.0                          # un-mask: the rock behind it, clearance < ray_range
 
 
 def test_center_ray_sees_obstacle_ahead():
@@ -42,7 +62,8 @@ def test_center_ray_sees_obstacle_ahead():
 def test_empty_ray_encoding():
     w = straight_world()
     v = sense_vision(w)
-    assert (v == np.array([1.0, 0, 0, 0, 0, 0, 0])).all()
+    # nothing hit -> dist=1 (ray_range), all one-hots 0, obstacle_clearance=1 (no rock on any bearing)
+    assert (v == np.array([1.0, 0, 0, 0, 0, 0, 0, 1.0])).all()
 
 
 def test_ray_detects_corpse():
@@ -116,7 +137,7 @@ def test_rival_dead_ahead_social_channel():
     w = straight_world()
     _add_rival(w, [45.0, 30.0])
     o = observe(w)
-    social = o[63:70]
+    social = o[88:95]
     assert social[0] == 1.0                          # has_rival
     assert social[1] > 0                              # rel_pos_fwd (rival ahead)
     assert (np.abs(social) <= 1.0).all()
@@ -125,7 +146,7 @@ def test_rival_dead_ahead_social_channel():
 def test_no_rival_social_channel_is_zero():
     w = straight_world()
     o = observe(w)
-    social = o[63:70]
+    social = o[88:95]
     assert social[0] == 0.0
     assert (social == 0.0).all()
 
@@ -135,7 +156,7 @@ def test_self_owned_egg_ahead_egg_channel():
     w.snakes[0].id = 0
     w.eggs = {"pos": np.array([[35.0, 30.0]]), "timer": np.array([10.0]), "owner": np.array([[0, 1]])}
     o = observe(w)
-    egg = o[70:74]
+    egg = o[95:99]
     assert egg[0] == 1.0 and egg[3] == 1.0            # has_egg, is_mine
     assert egg[1] > 0                                 # egg ahead
 
@@ -145,14 +166,24 @@ def test_foreign_egg_is_mine_zero():
     w.snakes[0].id = 5
     w.eggs = {"pos": np.array([[35.0, 30.0]]), "timer": np.array([10.0]), "owner": np.array([[0, 1]])}
     o = observe(w)
-    egg = o[70:74]
+    egg = o[95:99]
     assert egg[0] == 1.0 and egg[3] == 0.0
 
 
 def test_no_egg_channel_is_zero():
     w = straight_world()
     o = observe(w)
-    assert (o[70:74] == 0.0).all()
+    assert (o[95:99] == 0.0).all()
+
+
+def test_arrival_egg_is_uneatable_but_foreign_egg_shows():
+    # an arrival egg (owner [-1,-1]) is not yet a real egg -> egg channel stays empty (has_egg=0);
+    # a real foreign egg -> has_egg=1.
+    w = straight_world(); w.snakes[0].id = 5
+    w.eggs = {"pos": np.array([[35.0, 30.0]]), "timer": np.array([10.0]), "owner": np.array([[-1, -1]])}
+    assert observe(w)[95] == 0.0                          # arrival egg: uneatable, unsensed by egg channel
+    w.eggs = {"pos": np.array([[35.0, 30.0]]), "timer": np.array([10.0]), "owner": np.array([[0, 1]])}
+    assert observe(w)[95] == 1.0                          # real foreign egg: sensed
 
 
 def test_ray_detects_rival_head_as_other_body_distinct_from_self_and_chicken():
@@ -178,22 +209,22 @@ def test_repro_ready_toggles_on_three_way_gate():
     s.energy = CFG.repro_energy_frac * CFG.energy_max + 1
     s.target_length = CFG.repro_length_min + 1
     s.repro_cooldown = 0
-    assert observe(w)[86] == 1.0                       # all three gates pass
+    assert observe(w)[111] == 1.0                       # all three gates pass
     s.repro_cooldown = 5
-    assert observe(w)[86] == 0.0                        # cooldown blocks it
+    assert observe(w)[111] == 0.0                        # cooldown blocks it
     s.repro_cooldown = 0
     s.energy = 0.0
-    assert observe(w)[86] == 0.0                        # energy gate blocks it
+    assert observe(w)[111] == 0.0                        # energy gate blocks it
     s.energy = CFG.repro_energy_frac * CFG.energy_max + 1
     s.target_length = CFG.repro_length_min - 1
-    assert observe(w)[86] == 0.0                        # length gate blocks it
+    assert observe(w)[111] == 0.0                        # length gate blocks it
 
 
 def test_size_ratio_capped_at_one_for_max_length_rival():
     w = straight_world()
     _add_rival(w, [45.0, 30.0], target_length=CFG.length_cap)
     o = observe(w)
-    assert o[68] == 1.0                                 # size_ratio
+    assert o[93] == 1.0                                 # size_ratio (social[5])
 
 
 def test_observation_space_contains_generated_multisnake_world():
@@ -240,5 +271,5 @@ def test_observation_space_contains_corpse_pileup_beyond_ceiling():
     ego_obs = observe(w, ego)
     # raw (unclipped) intensity/fwd-gradient here are ~23.8/~12.5 -- both above chicken_ceiling=12
     # -- so landing exactly on the ceiling proves the clip fired, not that we stayed under it.
-    assert ego_obs[80] == CFG.chicken_ceiling             # corpse_intensity clipped to the ceiling
-    assert ego_obs[81] == CFG.chicken_ceiling             # corpse_grad_fwd clipped to the ceiling
+    assert ego_obs[105] == CFG.chicken_ceiling            # corpse_intensity clipped to the ceiling
+    assert ego_obs[106] == CFG.chicken_ceiling            # corpse_grad_fwd clipped to the ceiling
