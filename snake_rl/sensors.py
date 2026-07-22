@@ -9,7 +9,7 @@ Layout (see env._make_observation_space for the matching bounds):
   proprio 108:113 [energy, length, stamina, repro_ready, speed]
 """
 import numpy as np
-from .world import torus_delta, torus_dist, segment_circle_hit
+from .world import torus_delta, torus_dist
 
 OBS_DIM = 113
 
@@ -55,11 +55,14 @@ def _all_targets(world, snake):
     return cen, rad, kind
 
 
-def _cast(dirs, head, size, cen, rad, ray_range):
+def _cast(dirs, head, size, cen, rad, ray_range, n_obs=0):
     """Nearest-hit distance per ray against circles (cen, rad already Minkowski-inflated).
-    Returns (dist (R,), idx (R,)): dist=ray_range & idx=-1 on a ray that hits nothing."""
+    Returns (dist (R,), idx (R,), obs (R,)): dist=ray_range & idx=-1 on a ray that hits nothing.
+    `obs` = nearest hit among the FIRST n_obs columns (obstacles, the un-mask channel) computed from
+    the SAME cast, so vision needs only one pass instead of a second obstacle-only scan."""
     dist = np.full(len(dirs), ray_range, float)
     idx = np.full(len(dirs), -1, int)
+    obs = np.full(len(dirs), ray_range, float)
     if len(cen):
         m = torus_delta(cen, head, size)                 # (K,2) head->center (nearest image)
         tca = dirs @ m.T                                 # (R,K) projection of each ray
@@ -75,43 +78,36 @@ def _cast(dirs, head, size, cen, rad, ray_range):
         got = np.isfinite(best)
         dist[got] = best[got]
         idx[got] = j[got]
-    return dist, idx
+        if n_obs:                                        # nearest OBSTACLE (cols 0..n_obs) from same tt
+            bo = tt[:, :n_obs].min(axis=1)
+            go = np.isfinite(bo)
+            obs[go] = bo[go]
+    return dist, idx, obs
 
 
 def _scan(world, head, heading, snake=None):
-    """Vectorized raycast of all rays at once. Returns (dirs (R,2), dist (R,), kind (R,))
-    with kind 0=obstacle,1=chicken,2=self,3=other_body,4=egg,5=corpse,-1=none. `snake` (default ego)
-    decides which body is "self" vs "other" -- independent of `head`/`heading` (an interpolated
-    render pose need not match snake's exact stored pose)."""
+    """Vectorized raycast of all rays at once. Returns (dirs (R,2), dist (R,), kind (R,), clear (R,))
+    with kind 0=obstacle,1=chicken,2=self,3=other_body,4=egg,5=corpse,-1=none, and `clear` = the
+    per-ray nearest-OBSTACLE distance (the un-mask channel) from the SAME cast -- no second pass.
+    `snake` (default ego) decides which body is "self" vs "other" -- independent of `head`/`heading`
+    (an interpolated render pose need not match snake's exact stored pose)."""
     snake = snake if snake is not None else world.snakes[0]
     c = world.cfg
     cen, rad, kind = _all_targets(world, snake)
     rad = rad + c.head_radius                            # inflate by head radius (Minkowski): rays report
     dirs = ray_dirs(c, heading)                          # distance until the head EDGE touches -> the snake
-    dist, idx = _cast(dirs, head, world.size, cen, rad, c.ray_range)   # perceives its own width
+    n_obs = len(world.obstacle_pos)                      # obstacles are cols 0..n_obs of _all_targets
+    dist, idx, clear = _cast(dirs, head, world.size, cen, rad, c.ray_range, n_obs)  # perceives own width
     kinds = np.full(len(dirs), -1, int)
     got = idx >= 0
     kinds[got] = kind[idx[got]]
-    return dirs, dist, kinds
-
-
-def _obstacle_clearance(world, head, heading):
-    """Per-ray nearest OBSTACLE distance (ray_range if none) -- an UN-MASK channel: even when a ray's
-    nearest hit is a chicken/egg/rival, the snake still sees the solid rock behind it on that bearing
-    (a slidable-but-blocking hazard). Obstacles inflated by head_radius (Minkowski, Pitfall 4)."""
-    c = world.cfg
-    dirs = ray_dirs(c, heading)
-    if not len(world.obstacle_pos):
-        return np.full(len(dirs), c.ray_range, float)
-    dist, _ = _cast(dirs, head, world.size, world.obstacle_pos, world.obstacle_r + c.head_radius, c.ray_range)
-    return dist
+    return dirs, dist, kinds, clear
 
 
 def sense_vision(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
-    dirs, dist, kinds = _scan(world, snake.head, snake.heading, snake)
-    clear = _obstacle_clearance(world, snake.head, snake.heading)
+    dirs, dist, kinds, clear = _scan(world, snake.head, snake.heading, snake)
     out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (len(dirs), 1))   # 8 features/ray
     hit = kinds >= 0
     out[hit, 0] = dist[hit] / c.ray_range
@@ -122,28 +118,34 @@ def sense_vision(world, snake=None):
 
 def vision_distances(world, head, heading, snake=None):
     """For rendering: ray directions, hit distance, and hit kind, from an arbitrary (interpolated) pose."""
-    return _scan(world, head, heading, snake)
+    return _scan(world, head, heading, snake)[:3]
 
 
 def _smell_field(world, head, positions):
-    """Sum of occluded 1/(1+r) intensity + gradient (pointing toward each position) from head."""
+    """Sum of occluded 1/(1+r) intensity + gradient (pointing toward each position) from head.
+    Vectorized: per-position rel/dist, then a batched head->position vs all-obstacles occlusion test
+    that mirrors segment_circle_hit's arithmetic op-for-op (so the occlusion booleans are bit-identical),
+    then a masked sum over unoccluded positions (numpy sums <128 terms left-to-right = the old loop)."""
     if len(positions) == 0:
         return 0.0, np.zeros(2)
     rel = torus_delta(positions, head, world.size)
-    dist = np.linalg.norm(rel, axis=1)
-    intensity = 0.0
-    grad = np.zeros(2)
-    for i in range(len(positions)):
-        if dist[i] < 1e-6:
-            continue
-        if len(world.obstacle_pos):                                 # line-of-sight occlusion
-            blocked = segment_circle_hit(head, positions[i], world.obstacle_pos, world.obstacle_r,
-                                         world.size).any()
-            if blocked:
-                continue
-        r = dist[i]
-        intensity += 1.0 / (1.0 + r)
-        grad += (1.0 / (1.0 + r) ** 2) * (rel[i] / r)               # points toward the target
+    dist = np.sqrt((rel * rel).sum(1))
+    keep = dist >= 1e-6                                              # skip a target sitting on the head
+    if len(world.obstacle_pos) and keep.any():
+        m = torus_delta(world.obstacle_pos, head, world.size)       # (O,2) head->obstacle (shared p0)
+        seg_len2 = (rel * rel).sum(1)                               # (P,) == seg @ seg per position
+        safe = np.where(keep, seg_len2, 1.0)                        # avoid 0/0 on the skipped positions
+        t = np.clip((rel @ m.T) / safe[:, None], 0.0, 1.0)          # (P,O) clamp to the segment
+        proj = m[None] - t[..., None] * rel[:, None, :]            # (P,O,2) obstacle offset from segment
+        closest2 = (proj * proj).sum(2)                            # (P,O)
+        blocked = (closest2 <= (world.obstacle_r ** 2)[None]).any(1)
+        keep &= ~blocked
+    if not keep.any():
+        return 0.0, np.zeros(2)
+    r = dist[keep]
+    relv = rel[keep]
+    intensity = float((1.0 / (1.0 + r)).sum())
+    grad = ((1.0 / (1.0 + r) ** 2)[:, None] * (relv / r[:, None])).sum(0)
     return intensity, grad
 
 

@@ -41,7 +41,8 @@ def torus_delta(a, b, size):
 
 
 def torus_dist(a, b, size):
-    return np.linalg.norm(torus_delta(a, b, size), axis=-1)
+    d = torus_delta(a, b, size)
+    return np.sqrt((d * d).sum(-1))      # == linalg.norm(axis=-1), bit-identical, ~2x faster
 
 
 def ray_circle_hit(origin, u, centers, radii, max_t, size):
@@ -126,6 +127,10 @@ class World:
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
         self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int)}
         self._mate_streak = {}
+        # bumped whenever ANY snake's body geometry changes (move/grow); keys the per-snake dense-body
+        # cache reused across observers within a step (see _cached_render_body). Move bumps it N times
+        # in phase 1, then it's stable through phase-2 death checks and (post-eat) through observe.
+        self._body_gen = 0
 
     # --- motion (per-snake workers) ---
     def _slide(self, p0, disp, centers, radii):
@@ -152,7 +157,7 @@ class World:
             return p0 + d, False
         contact = p0 + best_t * d
         n = torus_delta(contact[None], centers[best_i][None], self.size)[0]   # center->contact (outward)
-        ln = np.linalg.norm(n)
+        ln = np.sqrt((n * n).sum())
         if ln < 1e-9:
             return contact, True
         n = n / ln
@@ -166,6 +171,7 @@ class World:
 
     def _move_snake(self, s, speed_idx, steer, dash):
         c = self.cfg
+        self._body_gen += 1                              # body geometry about to change -> invalidate cache
         if s.stun > 0:                                   # dizzy from a dash into a solid: frozen (steering too)
             s.stun -= 1
             s.dashed = False
@@ -215,11 +221,38 @@ class World:
         pts = np.array(s.path_uw)
         if len(pts) < 3:
             return
-        seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        dp = np.diff(pts, axis=0)
+        seg = np.sqrt((dp * dp).sum(1))
         cum = np.cumsum(seg[::-1])[::-1]              # dist from head to each point's forward neighbor
         # slack = max motion step (v_dash), so body_points_uw never truncates its tail after a dash
         keep = np.concatenate([cum <= (s.target_length + self.cfg.v_dash), [True]])
         s.path_uw = [p.copy() for p in pts[keep]]
+
+    def _arc_points(self, pts, targets):
+        """Place a point at each arc distance in `targets`, measured from the head (pts[-1]) walking
+        BACKWARD along the polyline. Vectorized replacement for the old per-vertex Python loop, and
+        BIT-IDENTICAL to it: same per-segment length (squared-sum sqrt), same left-to-right cumulative
+        arc (cumsum == the loop's `acc`; cumstart via concat, NOT cumend-seglen, to keep the exact
+        accumulation), same "first segment whose cumulative end >= target" assignment (searchsorted
+        'left' == the loop's `acc+step >= target`), same a + (b-a)*frac. Zero-length segments are
+        dropped (the loop's `continue`); targets past the path's total length are dropped (loop ends)."""
+        targets = np.asarray(targets, float)
+        rev = pts[::-1]
+        seg = rev[1:] - rev[:-1]                          # (M,2) b-a per segment (a = head-side vertex)
+        seglen = np.sqrt((seg * seg).sum(1))
+        keep = seglen >= 1e-12
+        if not keep.any():
+            return np.zeros((0, 2))
+        a = rev[:-1][keep]; seg = seg[keep]; seglen = seglen[keep]
+        cumend = np.cumsum(seglen)                        # arc at each segment tail (== loop acc+step)
+        cumstart = np.concatenate([[0.0], cumend[:-1]])   # arc at each segment head (== loop `acc`)
+        k = np.searchsorted(cumend, targets, side="left")
+        valid = k < len(seglen)
+        if not valid.any():
+            return np.zeros((0, 2))
+        k = k[valid]
+        frac = (targets[valid] - cumstart[k]) / seglen[k]
+        return a[k] + seg[k] * frac[:, None]
 
     def _body_points_uw(self, s):
         c = self.cfg
@@ -233,25 +266,11 @@ class World:
         skip = c.head_radius + c.body_radius + c.v_dash + c.segment_spacing
         targets = []
         t = skip
-        while t <= s.target_length:
+        while t <= s.target_length:                       # kept as-is: bit-identical target arc values
             targets.append(t); t += c.segment_spacing
         if not targets:
             return np.zeros((0, 2))
-        # walk from head (last vertex) backward, INTERPOLATING to the exact arc position
-        out, acc, ti = [], 0.0, 0
-        for i in range(len(pts) - 1, 0, -1):
-            a = pts[i]; b = pts[i - 1]
-            step = float(np.linalg.norm(a - b))
-            if step < 1e-12:
-                continue
-            while ti < len(targets) and acc + step >= targets[ti]:
-                frac = (targets[ti] - acc) / step
-                out.append(a + (b - a) * frac)
-                ti += 1
-            acc += step
-            if ti >= len(targets):
-                break
-        return np.array(out) if out else np.zeros((0, 2))
+        return self._arc_points(pts, targets)
 
     def _body_points(self, s):
         b = self._body_points_uw(s)
@@ -266,21 +285,8 @@ class World:
         if len(pts) < 2:
             return s.head_uw[None].copy()
         targets = np.arange(0.0, s.target_length + 1e-9, spacing)
-        out = [pts[-1].copy()]                           # index 0 = head (arc 0)
-        ti, acc = 1, 0.0
-        for i in range(len(pts) - 1, 0, -1):
-            a = pts[i]; b = pts[i - 1]
-            step = float(np.linalg.norm(a - b))
-            if step < 1e-12:
-                continue
-            while ti < len(targets) and acc + step >= targets[ti]:
-                frac = (targets[ti] - acc) / step
-                out.append(a + (b - a) * frac)
-                ti += 1
-            acc += step
-            if ti >= len(targets):
-                break
-        return np.array(out)
+        arc = self._arc_points(pts, targets[1:])          # targets[0]=0 is the head, prepended as idx 0
+        return np.vstack([pts[-1][None], arc]) if len(arc) else pts[-1][None].copy()
 
     # --- chickens & energy ---
     def nearest_chicken(self):
@@ -404,7 +410,7 @@ class World:
         alert = c.r_flee_peck if self.chicken_state[i] == 0 else c.r_flee
         if len(heads):
             to_heads = torus_delta(heads, self.chicken_pos[i], self.size)   # (K,2) chicken->each head
-            dist = np.linalg.norm(to_heads, axis=1)
+            dist = np.sqrt((to_heads * to_heads).sum(1))
             eff = alert * np.clip(speeds / c.v_snake, 0.0, 1.0)             # per-snake speed-scaled reach
             near = (dist < eff) & (dist > 1e-6)
         else:
@@ -419,7 +425,7 @@ class World:
             weight = c.r_flee - dist[near]
             away = -to_heads[near] / dist[near, None]
             repulsion = (weight[:, None] * away).sum(axis=0)
-            if np.linalg.norm(repulsion) > 1e-6:
+            if np.sqrt((repulsion * repulsion).sum()) > 1e-6:
                 base = float(np.arctan2(repulsion[1], repulsion[0]))
             else:                                                          # degenerate cancellation ->
                 j = int(np.argmin(np.where(near, dist, np.inf)))           # flee the nearest NEAR snake
@@ -517,6 +523,7 @@ class World:
             s.target_length = min(self.cfg.length_cap,
                                    s.target_length + n * self.cfg.grow_per_chicken)
             s.energy = min(self.cfg.energy_max, s.energy + energy_gain)
+            self._body_gen += 1                          # growth changes body length -> invalidate cache
         return n
 
     def try_eat(self):
@@ -655,13 +662,25 @@ class World:
                 del self._mate_streak[key]
 
     # --- collisions & full step ---
+    def _cached_render_body(self, o):
+        """`_body_render_path_uw(o)` memoized on the current _body_gen. _other_hazard recomputes each
+        rival's dense body once per observer (N-1 death checks + N-1 sensor scans per step); the body
+        is fixed between geometry changes, so cache it per snake and reuse. Bit-identical (returns the
+        very array a fresh call would build). Read-only by convention -- _other_hazard only reads/copies."""
+        cache = getattr(o, "_render_cache", None)
+        if cache is not None and cache[0] == self._body_gen:
+            return cache[1]
+        body = self._body_render_path_uw(o)
+        o._render_cache = (self._body_gen, body)
+        return body
+
     def _other_hazard(self, s):
         pts, rads = [], []
         for o in self.snakes:
             if o is s or not o.alive:
                 continue
             pts.append(o.head_uw); rads.append(self.cfg.head_radius)   # head (head_radius)
-            body = self._body_render_path_uw(o)[1:]    # dense body, NO neck skip; skip idx-0 head (added above)
+            body = self._cached_render_body(o)[1:]     # dense body, NO neck skip; skip idx-0 head (added above)
             if len(body):
                 pts.extend(body); rads.extend([self.cfg.body_radius] * len(body))
         if not pts:
