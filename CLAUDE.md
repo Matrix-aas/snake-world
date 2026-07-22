@@ -151,7 +151,9 @@ DummyVecEnv([ Monitor(SnakeEnv) ]) ) )`. The underlying world is
   predation, Model A). So the only death causes are now `snake` and `starve`. This replaces the
   reward-shaping approach to obstacle avoidance (retired Pitfall 16): the stun is a physical
   *consequence*, not a reward gate — the snake stays free to dash anywhere and *learns* (via sight +
-  speed) that ramming a wall wastes time.
+  speed) that ramming a wall wastes time. Because solids no longer kill, the world is deliberately
+  **denser** now (`n_obstacles_min/max 12/32`, doubled) — richer to watch and it invites new tactics
+  (herd prey into clutter, weave through cover) instead of just thinning the population.
 - **Graduated speed → emergent stalk / ambush / gap-threading (v2, Pitfall 20).** The speed action
   dimension lets a snake pick any cruise 0→`v_snake` (dash on top). **Prey fear motion:** a chicken's
   flee-alert from each snake scales with that snake's speed, **capped at 1× base** —

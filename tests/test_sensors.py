@@ -261,7 +261,13 @@ def test_observation_space_contains_corpse_pileup_beyond_ceiling():
     from snake_rl.env import SnakeEnv
     env = SnakeEnv(seed=0)
     w = generate_world(CFG, seed=23, size=(140.0, 140.0), n_snakes=CFG.n_max)
+    w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros((0,))   # no LOS occlusion -> the raw
+                                                                       # corpse smell sum genuinely
+                                                                       # exceeds the ceiling (isolate the clip)
     ego = w.snakes[0]
+    ego.heading = 0.0                                                  # face +x so the +x corpse line is
+                                                                       # straight ahead -> grad_fwd is maximal
+                                                                       # (deterministic, not RNG-heading dependent)
     n = CFG.chicken_ceiling * 3
     positions = np.array([wrap(ego.head + np.array([0.05 + 0.03 * i, 0.0]), w.size) for i in range(n)])
     w.corpses = {"pos": positions, "food": np.full(n, 5.0)}

@@ -96,6 +96,9 @@ def test_food_target_scales_with_live_snakes():
     from snake_rl.config import CFG
     from snake_rl.worldgen import generate_world
     w = generate_world(CFG, seed=10, size=(150.0, 150.0), n_snakes=4)
+    w.set_chickens(np.zeros((0, 2)))            # clear worldgen's random initial abundance (up to
+                                               # chicken_ceiling) so we test maybe_spawn's population
+                                               # -scaled TARGET, not the one-off starting count
     # drive spawns and assert the chicken count tracks ~2 per snake, capped by the ceiling
     for _ in range(400):
         w.maybe_spawn()

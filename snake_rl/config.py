@@ -69,8 +69,9 @@ class Config:
     segment_spacing: float = 0.6
     obstacle_radius_min: float = 1.5
     obstacle_radius_max: float = 4.0
-    n_obstacles_min: int = 6
-    n_obstacles_max: int = 16
+    n_obstacles_min: int = 12         # doubled (was 6/16): obstacles are non-lethal solids now, so a
+    n_obstacles_max: int = 32         # denser world reads richer + invites new tactics (herd prey into
+                                      # clutter, weave through cover) without just killing snakes.
     # energy (hunger — not lethal)
     energy_max: float = 100.0
     energy_decay: float = 0.05
