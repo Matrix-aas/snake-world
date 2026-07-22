@@ -8,8 +8,8 @@ proportion to its speed — a motionless snake is invisible to them), thread aro
 obstacles (rocks/trees are impassable, NOT lethal — dashing into one just *stuns*), kill each other
 by **cut-off** (leaving a corpse to scavenge), and **reproduce** via eggs laid by two well-fed
 snakes — a living, self-sustaining population meant to run forever as a screensaver. Trained headless (SB3 PPO, CPU), watched in a fullscreen pygame viewer. **The
-behavior is meant to look alive** — stalk, deliberate pounce, guard/raid eggs, avoid clutter — not
-to be optimal.
+behavior is meant to look alive** — stalk, deliberate pounce, guard/raid eggs, weave through
+clutter (obstacles are solid but never lethal — no crashes) — not to be optimal.
 
 > **This file is the living memory of the project. Keep it current.** When you change the
 > reward, the observation, the physics, the training recipe, or the hyperparameters — update
