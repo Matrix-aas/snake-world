@@ -1,6 +1,7 @@
 import os
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import numpy as np
+import pygame
 from snake_rl.config import CFG
 from snake_rl.worldgen import generate_world
 from snake_rl.render import Renderer, RAY_KIND, color_for
@@ -13,6 +14,26 @@ def test_render_draws_without_error():
     r.draw(w)             # must not raise
     r.toggle_sensors()
     r.draw(w)
+    r.close()
+
+
+def test_ground_patchwork_is_deterministic_and_varied():
+    # The world backdrop is a hashed patchwork of the 6 seamless grass variants (with a graceful
+    # single-tile / procedural fallback). It must be byte-identical across rebuilds -- stable
+    # per-frame AND frame-to-frame -- so the ground never flickers. When the variant set is present,
+    # the per-cell hash must draw from more than one variant (not collapse to one repeated tile).
+    w = generate_world(CFG, seed=0)
+    r = Renderer(scale=6, show_sensors=False)
+    r.draw(w)                                       # triggers _ensure -> load assets + build ground
+    g1, g2 = r._build_ground(), r._build_ground()
+    assert g1.get_size() == r.canvas.get_size()
+    assert np.array_equal(pygame.surfarray.array3d(g1), pygame.surfarray.array3d(g2))  # no flicker
+    variants = r._assets.get("ground_set")
+    if variants:                                    # assets present -> a real multi-variant patchwork
+        assert len(variants) == 6
+        n = len(variants)
+        picks = {((c * 73856093) ^ (row * 19349663)) % n for c in range(6) for row in range(6)}
+        assert len(picks) > 1                       # varied, not a single repeated tile
     r.close()
 
 

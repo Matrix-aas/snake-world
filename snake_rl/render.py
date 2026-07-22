@@ -22,7 +22,9 @@ SS = 2                   # supersample factor (draw big, smoothscale down for an
 TARGET_PX = 860          # display fits ~this many pixels on its long side
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 ASSET_FILES = {
-    "ground": "ground.png",
+    "ground": "ground.png",                                     # single-tile fallback (see _build_ground)
+    "ground_set": ["ground_0.png", "ground_1.png", "ground_2.png",   # 6 mutually-tileable grass variants
+                   "ground_3.png", "ground_4.png", "ground_5.png"],  # patchworked into the world backdrop
     "rock": ["rock1.png", "rock2.png"],
     "tree": ["tree1.png", "tree2.png"],
     "chicken": "chicken.png",                                   # static fallback for the sheets below
@@ -278,10 +280,17 @@ class Renderer:
         return np.hstack([pos, vel])
 
     def _build_ground(self):
-        """Pre-tile the seamless ground texture into one canvas-sized surface (blit once/frame)."""
+        """Pre-tile the world backdrop into one canvas-sized surface (blit once/frame). Uses the 6
+        seamless grass VARIANTS as a hashed patchwork: each grid cell picks a variant deterministically
+        from (col,row) -- stable per-frame AND frame-to-frame (no flicker) -- so the ground reads as
+        natural terrain variation, not one repeated tile. The variants are tone-matched to a shared
+        mean (kills rectangular brightness blocks between cells) and cross-faded over a small overlap
+        band at the cell edges (soft transitions; interiors stay single-tile crisp), so no hard seam
+        shows. Falls back to a single ground.png, then a procedural grid, if assets are missing."""
         surf = pygame.Surface((self.cw, self.ch)).convert()
-        tex = self._assets.get("ground")
-        if tex is None:
+        variants = self._assets.get("ground_set") or (
+            [self._assets["ground"]] if "ground" in self._assets else None)
+        if not variants:
             surf.fill(BG)
             step = max(6, int(6 * self._scale))
             for x in range(0, self.cw, step):
@@ -290,11 +299,42 @@ class Renderer:
                 pygame.draw.line(surf, GRID, (0, y), (self.cw, y))
             return surf
         tile_px = int(np.clip(min(self.cw, self.ch) / 3.2, 220, 640))
-        tile = pygame.transform.smoothscale(tex, (tile_px, tile_px))
-        for y in range(0, self.ch, tile_px):
-            for x in range(0, self.cw, tile_px):
-                surf.blit(tile, (x, y))
+        f = max(8, tile_px // 6)                                # cross-fade band width
+        base, feather = self._ground_tileset(variants, tile_px, f)
+        n = len(base)
+
+        def pick(c, r):                                        # deterministic per-cell variant
+            return ((c * 73856093) ^ (r * 19349663)) % n
+        cols, rows = self.cw // tile_px + 1, self.ch // tile_px + 1
+        for r in range(rows):                                  # opaque base pass: crisp interiors
+            for c in range(cols):
+                surf.blit(base[pick(c, r)], (c * tile_px, r * tile_px))
+        for r in range(rows):                                  # feather pass: cross-fade the boundaries
+            for c in range(cols):
+                surf.blit(feather[pick(c, r)], (c * tile_px - f, r * tile_px - f))
         return surf
+
+    def _ground_tileset(self, variants, T, f):
+        """Prepare the patchwork tiles once: each variant tone-matched (85% toward the shared mean)
+        and scaled to T (the crisp opaque base), plus an oversized (T+2f) copy with a feathered
+        alpha edge for the overlap cross-fade. Returns (base_surfs, feather_surfs)."""
+        arrs = [np.transpose(pygame.surfarray.array3d(pygame.transform.smoothscale(v, (T, T))),
+                             (1, 0, 2)).astype(np.float32) for v in variants]
+        gmean = np.mean([a.reshape(-1, 3).mean(0) for a in arrs], axis=0)
+        TT = T + 2 * f
+        w = np.clip(np.minimum(np.arange(TT), TT - 1 - np.arange(TT)) / f, 0.0, 1.0)   # edge ramp 0->1
+        alpha = (np.minimum(w[:, None], w[None, :]) * 255).astype(np.uint8)            # symmetric, [x,y]
+        base, feather = [], []
+        for a in arrs:
+            eq = np.clip(a + 0.85 * (gmean - a.reshape(-1, 3).mean(0)), 0, 255).astype(np.uint8)
+            b = pygame.surfarray.make_surface(np.transpose(eq, (1, 0, 2))).convert()
+            base.append(b)
+            big = pygame.transform.smoothscale(b, (TT, TT)).convert_alpha()
+            av = pygame.surfarray.pixels_alpha(big)
+            av[:] = alpha                                     # feather the edges to 0 (overlap blend)
+            del av                                            # unlock the surface before blitting
+            feather.append(big)
+        return base, feather
 
     # --- scene layers ---
     def _draw_obstacles(self, world):
