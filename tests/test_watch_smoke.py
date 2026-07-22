@@ -69,7 +69,7 @@ def test_run_headless_returns_ecosystem_metrics_dict(tmp_path):
     model_path = tmp_path / "m.zip"
     train(total_steps=256, n_envs=1, model_path=str(model_path), reset=True, seed=0)
     metrics = run_headless(str(model_path), seed=0, episodes=1, max_steps=120)
-    assert set(metrics["deaths"]) == {"obstacle", "self", "snake", "starve"}
+    assert set(metrics["deaths"]) == {"snake", "starve"}
     assert len(metrics["population"]) == 120
     for key in ("births", "kills", "starvations", "catch_rate", "dash_usage", "steps"):
         assert key in metrics

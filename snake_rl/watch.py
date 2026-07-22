@@ -203,7 +203,7 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5, max_steps
     model, controller, world = _new_ecosystem(model_path, seed)
     total_steps = max_steps if max_steps is not None else max(1, episodes) * CFG.episode_horizon
 
-    deaths = {"obstacle": 0, "self": 0, "snake": 0, "starve": 0}
+    deaths = {"snake": 0, "starve": 0}     # obstacles/own body are solid-slide non-lethal now: only these two
     births = 0
     population = []
     catches = 0
@@ -247,8 +247,7 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5, max_steps
     print(f"  dash usage:  {metrics['dash_usage']:5.0f}% of live snake-steps")
     print(f"  population:  mean {np.mean(population):4.1f}   min {min(population)}   max {max(population)}")
     print(f"  births:      {births}    kills: {metrics['kills']}    starvations: {metrics['starvations']}")
-    print(f"  deaths:      obstacle {deaths['obstacle']}, self {deaths['self']}, "
-          f"snake {deaths['snake']}, starve {deaths['starve']}")
+    print(f"  deaths:      snake {deaths['snake']}, starve {deaths['starve']}")
     return metrics
 
 
