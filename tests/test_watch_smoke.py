@@ -83,7 +83,7 @@ def test_load_model_rejects_dim_mismatched_model(tmp_path):
         def __init__(self):
             super().__init__()
             self.observation_space = spaces.Box(-1.0, 1.0, (10,), dtype=np.float32)
-            self.action_space = spaces.MultiDiscrete([3, 2])
+            self.action_space = spaces.MultiDiscrete([4, 3, 2])
 
         def reset(self, *, seed=None, options=None):
             return self.observation_space.sample(), {}

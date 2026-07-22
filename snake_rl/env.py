@@ -7,7 +7,6 @@ from .config import CFG, assert_invariants
 from .worldgen import generate_world
 from .sensors import observe, OBS_DIM
 from .selfplay import OpponentController
-from .world import torus_dist
 
 
 def _make_observation_space(cfg):
@@ -66,11 +65,10 @@ class SnakeEnv(gym.Env):
         self._dash_penalty = cfg.dash_penalty if dash_penalty is None else dash_penalty
         self._opp = OpponentController(cfg)    # drives in-env opponents from a policy snapshot (self-play)
         self.set_hardness(hardness)            # sets self.cfg (stamina gate/regen interpolated easy<->hard)
-        self.action_space = spaces.MultiDiscrete([3, 2])
+        self.action_space = spaces.MultiDiscrete([4, 3, 2])   # speed x steer x dash
         self.observation_space = _make_observation_space(cfg)
         self.world = None
         self._last_phi = 0.0
-        self._last_phi_obs = 0.0
         self._last_ids = frozenset()
 
     def set_hardness(self, h):
@@ -95,18 +93,6 @@ class SnakeEnv(gym.Env):
         d = min(d, self.cfg.ray_range)
         return -d / self.cfg.ray_range
 
-    def _phi_obstacle(self):
-        """PBRS potential well around obstacles: 0 outside obs_avoid_range, dipping linearly to
-        -obs_avoid_weight at the lethal surface (obstacle_r + head_radius, where _death_cause fires).
-        Moving away raises phi -> positive shaping (steer-away gradient); toward -> negative."""
-        w = self.world
-        if not len(w.obstacle_pos):
-            return 0.0
-        c = self.cfg
-        d = torus_dist(w.obstacle_pos, w.head, w.size) - w.obstacle_r - c.head_radius
-        d = float(np.clip(d.min(), 0.0, c.obs_avoid_range))
-        return -c.obs_avoid_weight * (1.0 - d / c.obs_avoid_range)
-
     def reset(self, *, seed=None, options=None):
         # First seedless reset seeds the stream from the constructor seed; every reset then
         # draws a FRESH world seed -> real domain randomization across episodes (not one fixed world).
@@ -122,7 +108,6 @@ class SnakeEnv(gym.Env):
                                     arrivals=True)
         self._opp.reset_all()                  # [I-1] drop stale opponent frame rings for the new world
         self._last_phi = self._phi()
-        self._last_phi_obs = self._phi_obstacle()
         self._last_ids = frozenset(int(i) for i in self.world.chicken_id)
         return observe(self.world), {}
 
@@ -142,18 +127,13 @@ class SnakeEnv(gym.Env):
             f = self.cfg.gamma * phi - self._last_phi
         self._last_phi = phi
         self._last_ids = ids
-        # obstacle-avoidance PBRS: obstacles are static within an episode (never eaten/spawned/moved),
-        # so this potential is continuous every step -> pay it unconditionally (no set-change zeroing).
-        phi_o = self._phi_obstacle()
-        f += self.cfg.gamma * phi_o - self._last_phi_obs
-        self._last_phi_obs = phi_o
         return f
 
     def step(self, action):
         c = self.cfg
-        steering, dash = int(action[0]), int(action[1])
+        speed, steer, dash = int(action[0]), int(action[1]), int(action[2])
         ego_id = self.world.snakes[0].id
-        out = self.world.step(steering, dash, opponent_fn=lambda world, s: self._opp.act(world, s))
+        out = self.world.step(speed, steer, dash, opponent_fn=lambda world, s: self._opp.act(world, s))
         terminated = out["died"]
         truncated = self.world.steps >= c.episode_horizon
         reward = c.reward_eat * out["ate"]
@@ -164,9 +144,7 @@ class SnakeEnv(gym.Env):
         for sid, _cause in out["deaths_detailed"]:
             self._opp.reset_snake(sid)         # clear a dead snake's frame ring (no stale frames)
         if terminated:
-            # obstacle deaths cost more (Pitfall 16): flips the "chase a chicken into a rock-gap"
-            # gamble from +EV to -EV, which PBRS alone (policy-invariant) can't do.
-            reward += c.reward_death_obstacle if self.world.death_cause == "obstacle" else c.reward_death
+            reward += c.reward_death           # flat cost on any death (starve / rival cut-off)
         else:
             reward += self._shaping()
         # PBRS shaping (>=0 when a chicken is far) partly offsets this while well-fed; that's the

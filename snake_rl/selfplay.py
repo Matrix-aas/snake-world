@@ -23,7 +23,7 @@ class OpponentController:
         # what model.policy sees after VecFrameStack+VecNormalize at train time (no internal norm).
         self.policy = ActorCriticPolicy(
             observation_space=Box(-np.inf, np.inf, (OBS_DIM * self.n_stack,), np.float32),
-            action_space=MultiDiscrete([3, 2]),
+            action_space=MultiDiscrete([4, 3, 2]),   # speed x steer x dash (must match SnakeEnv's action net)
             lr_schedule=lambda _: 0.0,
             net_arch=dict(pi=[128, 128], vf=[128, 128]),
         )
@@ -48,9 +48,9 @@ class OpponentController:
                        -self.clip_obs, self.clip_obs).astype(np.float32)
 
     def act(self, world, snake):
-        """(steering, dash) for one opponent from the PRE-STEP world. Straight until first sync."""
+        """(speed, steer, dash) for one opponent from the PRE-STEP world. ⅓-cruise straight until sync."""
         if not self._synced:
-            return (1, 0)                        # [I-1 bootstrap]: a fresh env is valid pre-sync
+            return (1, 1, 0)                     # [I-1 bootstrap]: a fresh env is valid pre-sync
         ring = self.rings.get(snake.id)
         if ring is None:
             ring = np.zeros((self.n_stack, OBS_DIM), np.float32)
@@ -58,7 +58,7 @@ class OpponentController:
         ring[-1] = observe(world, snake)
         self.rings[snake.id] = ring
         a, _ = self.policy.predict(self._preprocess(ring)[None], deterministic=False)
-        return (int(a[0][0]), int(a[0][1]))
+        return (int(a[0][0]), int(a[0][1]), int(a[0][2]))
 
     def reset_snake(self, snake_id):
         """Drop a snake's ring (call on hatch + death) -> re-created zeroed on its next act."""

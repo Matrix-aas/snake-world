@@ -99,8 +99,8 @@ def _step_world(world, controller):
     population back up to the sustain floor if this step dropped it below (see _reseed_floor) --
     run_watch's gore diff snapshots BEFORE this call, so a reseed reads as a hatch effect for free."""
     ego = world.snakes[0]
-    steer, dash = controller.act(world, ego) if ego.alive else (1, 0)
-    out = world.step(steer, dash, opponent_fn=lambda w, s: controller.act(w, s))
+    speed, steer, dash = controller.act(world, ego) if ego.alive else (1, 1, 0)
+    out = world.step(speed, steer, dash, opponent_fn=lambda w, s: controller.act(w, s))
     for sid, _cause in out["deaths_detailed"]:
         controller.reset_snake(sid)
     _reseed_floor(world, controller)

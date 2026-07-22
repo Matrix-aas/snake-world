@@ -49,7 +49,7 @@ def test_reset_all_and_reset_snake_zero_rings():
 def test_bootstrap_acts_straight_before_sync():
     w = generate_world(CFG, seed=4, size=(140.0, 140.0), n_snakes=2)
     ctrl = OpponentController()
-    assert ctrl.act(w, w.snakes[1]) == (1, 0)
+    assert ctrl.act(w, w.snakes[1]) == (1, 1, 0)
     assert ctrl.rings == {}                           # pre-sync must not touch rings
 
 
@@ -76,7 +76,7 @@ def test_opponents_move_and_reward_finite():
     seen = {}
     moved = False
     for _ in range(CFG.egg_timer * 2 + 20):
-        _, r, term, trunc, _ = env.step([1, 0])
+        _, r, term, trunc, _ = env.step([1, 1, 0])
         assert np.isfinite(r)
         for s in env.world.snakes[1:]:
             if s.id in seen and np.linalg.norm(s.head_uw - seen[s.id]) > 1e-6:
@@ -111,7 +111,7 @@ def test_repro_reward_only_on_ego_hatch():
         env, w = base_env()
         pos = far_point(w)
         w.eggs = {"pos": pos[None].copy(), "timer": np.array([1.0]), "owner": np.array([owner])}
-        return env.step([1, 0])[1]
+        return env.step([1, 1, 0])[1]
 
     r_ego = run_hatch([0, 1])                          # ego (id 0) owned egg hatches -> pays reward_repro
     r_non = run_hatch([1, 2])                          # non-ego egg hatches -> pays nothing
@@ -127,9 +127,9 @@ def test_repro_reward_only_on_ego_hatch():
                           _prev_head_uw=oh.copy(), id=1))
     w.eggs = {"pos": w.snakes[1].head.copy()[None],   # sits on opponent 1 -> foreign -> eaten next step
               "timer": np.array([45.0]), "owner": np.array([[0, 99]])}
-    r_raided = env.step([1, 0])[1]
+    r_raided = env.step([1, 1, 0])[1]
     env, _ = base_env()
-    r_noegg = env.step([1, 0])[1]
+    r_noegg = env.step([1, 1, 0])[1]
     assert abs(r_raided - r_noegg) < 1e-6
 
 
@@ -142,7 +142,7 @@ def test_set_opponent_policy_syncs_and_runs():
                                                 var=np.ones(D, np.float32)), 10.0, 1e-8)
     assert env._opp._synced
     for _ in range(20):
-        _, r, term, trunc, _ = env.step([1, 0])
+        _, r, term, trunc, _ = env.step([1, 1, 0])
         assert np.isfinite(r)
         if term or trunc:
             break
