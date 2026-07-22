@@ -130,6 +130,10 @@ def assert_invariants(cfg: Config) -> None:
     assert cfg.v_dash > cfg.v_flee, "v_dash must exceed v_flee"
     # a pecking chicken is distracted: its startle range must be tighter than the walking alert range
     assert cfg.r_flee_peck < cfg.r_flee, "r_flee_peck must be smaller than r_flee (peck = distracted)"
+    # a scared hen's fear-persistence must outlast its startle freeze, or it could expire the panic
+    # window mid-freeze and settle to WALK without ever bolting (the fix would be a no-op)
+    assert cfg.chicken_flee_persist > cfg.chicken_startle_steps, \
+        "chicken_flee_persist must exceed chicken_startle_steps so a scared hen actually bolts"
     # motion/collision: a stun lasts at least one step, cruise levels span 0 -> full v_snake, forward rays >= 0
     assert cfg.stun_steps >= 1, "stun_steps must be at least 1"
     assert cfg.speed_levels[0] == 0.0 and cfg.speed_levels[-1] == 1.0, \
