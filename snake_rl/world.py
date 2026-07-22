@@ -103,11 +103,14 @@ class World:
         self.chicken_pos = np.zeros((0, 2)); self.chicken_dir = np.zeros((0,))
         self.chicken_id = np.zeros((0,), dtype=int)      # stable id per chicken
         # behavior FSM, parallel to chicken_pos: state 0=peck 1=walk 2=flee, timer = steps left
-        # in the current peck/walk, startle = flee steps still fluttering fast. Kept the SAME length
-        # as chicken_pos everywhere (created in _add_chicken/set_chickens, filtered in _snake_eat).
+        # in the current peck/walk, startle = flee steps still fluttering fast, flee = FEAR-PERSISTENCE
+        # countdown (a scared hen keeps bolting this many steps even after the snake stops/leaves, so a
+        # snake can't "un-spook" it by freezing). All kept the SAME length as chicken_pos everywhere
+        # (created in _add_chicken/set_chickens, filtered in _snake_eat).
         self.chicken_state = np.zeros((0,), dtype=int)
         self.chicken_timer = np.zeros((0,), dtype=int)
         self.chicken_startle = np.zeros((0,), dtype=int)
+        self.chicken_flee = np.zeros((0,), dtype=int)
         self._next_chicken_id = 0
         # chickens DROP FROM THE SKY (Goal 2): a spawned chicken first spends chicken_arrive_steps
         # here, falling, then lands into the real chicken_* arrays. Kept SEPARATE from chicken_pos so
@@ -315,6 +318,7 @@ class World:
         self.chicken_state = np.append(self.chicken_state, st)
         self.chicken_timer = np.append(self.chicken_timer, tm)
         self.chicken_startle = np.append(self.chicken_startle, 0)
+        self.chicken_flee = np.append(self.chicken_flee, 0)
         self._next_chicken_id += 1
 
     def _land_arrivals(self):
@@ -345,6 +349,7 @@ class World:
         self.chicken_state = sts
         self.chicken_timer = tms
         self.chicken_startle = np.zeros(n, int)
+        self.chicken_flee = np.zeros(n, int)
         self.arriving = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,), dtype=int),
                          "head": np.zeros((0,))}                                         # full chicken reset
         self._next_chicken_id += n
@@ -404,30 +409,44 @@ class World:
             near = (dist < eff) & (dist > 1e-6)
         else:
             near = np.zeros(0, bool)
-        if near.any():
+        if near.any():                                                     # a MOVING snake is within reach
             if self.chicken_state[i] != 2:                                  # startle-FREEZE on ENTERING flee
                 self.chicken_state[i] = 2
                 self.chicken_startle[i] = c.chicken_startle_steps
+            self.chicken_flee[i] = c.chicken_flee_persist                   # (re)arm fear-persistence
             # linear falloff, ->0 at r_flee (the WALK/flee alert radius; for a PECK-triggered startle
             # the alert is the tighter r_flee_peck, so weight there bottoms out at ~r_flee-r_flee_peck)
             weight = c.r_flee - dist[near]
             away = -to_heads[near] / dist[near, None]
             repulsion = (weight[:, None] * away).sum(axis=0)
             if np.linalg.norm(repulsion) > 1e-6:
-                base = np.arctan2(repulsion[1], repulsion[0])
+                base = float(np.arctan2(repulsion[1], repulsion[0]))
             else:                                                          # degenerate cancellation ->
                 j = int(np.argmin(np.where(near, dist, np.inf)))           # flee the nearest NEAR snake
-                base = np.arctan2(-to_heads[j][1], -to_heads[j][0])
+                base = float(np.arctan2(-to_heads[j][1], -to_heads[j][0]))
+            self.chicken_dir[i] = base                                      # remember the flee heading
             if self.chicken_startle[i] > 0:
                 self.chicken_startle[i] -= 1
                 return base, 0.0                                            # startle FREEZE: a beat of surprise
             return base, c.v_flee                                          # then bolt away
 
-        # --- safe: a chicken that WAS fleeing resumes wandering (settles to peck later, via timer) ---
+        # --- FEAR PERSISTENCE: no snake is within reach right now (it stopped, slowed, or backed off),
+        #     but a hen that was just scared keeps BOLTING in its last flee direction until its panic
+        #     timer runs out -- it does NOT re-settle the instant the predator freezes. This is what
+        #     kills the "spook the chicken, then stop dead so it calms, then grab it" exploit. ---
+        if self.chicken_state[i] == 2 and self.chicken_flee[i] > 0:
+            self.chicken_flee[i] -= 1
+            if self.chicken_startle[i] > 0:                                 # finish a pending startle freeze
+                self.chicken_startle[i] -= 1
+                return self.chicken_dir[i], 0.0
+            return self.chicken_dir[i], c.v_flee                            # keep bolting the last flee heading
+
+        # --- calm at last: panic expired (or never scared) -> a fleeing chicken settles to WALK ---
         if self.chicken_state[i] == 2:
             self.chicken_state[i] = 1
             self.chicken_timer[i] = int(self.rng.integers(c.chicken_walk_min, c.chicken_walk_max + 1))
             self.chicken_startle[i] = 0
+            self.chicken_flee[i] = 0
         # --- peck <-> walk on the timer ---
         self.chicken_timer[i] -= 1
         if self.chicken_timer[i] <= 0:
@@ -465,6 +484,7 @@ class World:
                 self.chicken_state = self.chicken_state[keep]     # keep FSM arrays in lock-step
                 self.chicken_timer = self.chicken_timer[keep]
                 self.chicken_startle = self.chicken_startle[keep]
+                self.chicken_flee = self.chicken_flee[keep]
                 n += nc
                 energy_gain += nc * self.cfg.energy_refill
         if len(self.corpses["pos"]):

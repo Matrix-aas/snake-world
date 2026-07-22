@@ -197,7 +197,13 @@ DummyVecEnv([ Monitor(SnakeEnv) ]) ) )`. The underlying world is
   vs. the full `r_flee` (12) while walking or already fleeing; each near snake's contribution is then
   scaled by its own speed (`·clip(speed/v_snake, 0, 1)`), so a slow/stopped snake is less/not
   alarming (Pitfall 20). The state-dependent base (Pitfall 10) is what makes hunting discoverable at
-  all with 2–4 snakes competing for the same chickens.
+  all with 2–4 snakes competing for the same chickens. **Fear persistence (v2, Pitfall 20):** once a
+  hen is fleeing it keeps bolting (in its last flee heading) for `chicken_flee_persist` steps *even
+  after the snake stops or leaves* — re-armed every step a snake is within reach. A scared hen does
+  NOT re-settle the instant the predator freezes, which closes the "spook it, then stop dead so it
+  calms, then grab it" exploit the speed-scaled alert would otherwise open. The **peck window was
+  halved** (`chicken_peck_min/max 6/18`) so the stationary catch window isn't too generous once snakes
+  wield the full speed/stop toolkit.
 - **Chickens DROP FROM THE SKY, not pop in (Goal 2, Pitfall 17).** In a production world
   (`world.chicken_sky`, set by `worldgen(arrivals=True)`), a runtime-spawned chicken first spends
   `chicken_arrive_steps` **falling** — a growing ground shadow + the hen descending — living in a
@@ -375,6 +381,16 @@ Every one of these cost real training runs (some cost more than one). Do not red
     a fresh retrain. Capping at 1× keeps max alert = today's `r_flee`, so hunting still bootstraps and
     catch-invariant #3 stays valid. The snake also senses its **own speed** (proprio idx 112) to
     reason about its turn radius.
+    **The speed-scaled alert opens a degenerate exploit — close it with FEAR PERSISTENCE.** If alert
+    tracks the snake's *instantaneous* speed, a snake can spook a hen, then **stop dead** (speed 0 ⇒
+    alert 0) so the hen instantly "calms" and freezes, then grab it. The policy discovers this from
+    the very first steps of training. Fix: a scared hen keeps bolting for `chicken_flee_persist` (15)
+    steps *regardless of the snake's current speed* — the panic timer is re-armed while a snake is in
+    reach and only runs down once it isn't (`world.chicken_flee`, a 4th FSM array kept lockstep with
+    the others, Pitfall 17). A real hen doesn't re-settle the instant the predator freezes. Ambush
+    (a stopped snake never alarms a *calm* hen) is untouched — persistence only governs an
+    *already-scared* one. Pair it with a shorter peck window (`chicken_peck_min/max 6/18`, halved) so
+    the stationary catch window isn't a free lunch once snakes wield stop/stalk/dash together.
 
 ---
 
@@ -413,9 +429,11 @@ solid ⇒ frozen this many steps — Pitfall 19).
 below): `s_max 30`, `stamina_drain 1.0`, hard `dash_min_stamina 1.0`, easy-curriculum
 `dash_min_stamina_easy 0.05` / `stamina_regen_easy 0.6`, `v_dash 2.0`, `r_flee 12` (walk alert).
 
-**Chicken FSM:** `chicken_peck_min/max 12/35`, `chicken_walk_min/max 18/45`,
-`chicken_startle_steps 4`, `r_flee 12` (walk/flee alert), `r_flee_peck 2.5` (peck alert — the
-stalk-and-pounce window, Pitfall 10). **`chicken_arrive_steps 12`** — a sky-dropped chicken falls
+**Chicken FSM:** `chicken_peck_min/max 6/18` (halved from 12/35 — shorter stationary catch window,
+Pitfall 20), `chicken_walk_min/max 18/45`, `chicken_startle_steps 4`, **`chicken_flee_persist 15`**
+(fear-persistence: a scared hen keeps bolting this many steps after the last time a snake was in
+reach — kills the spook-then-stop exploit, Pitfall 20), `r_flee 12` (walk/flee alert), `r_flee_peck
+2.5` (peck alert — the stalk-and-pounce window, Pitfall 10). **`chicken_arrive_steps 12`** — a sky-dropped chicken falls
 for this many steps (in `world.arriving`, unsensed/uneatable) before it lands (Goal 2, Pitfall 17).
 
 **Reproduction / eggs / corpses (the config's current hard endpoints — the curriculum sweeps to

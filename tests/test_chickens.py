@@ -112,6 +112,32 @@ def test_prey_senses_snake_speed():
     assert w.chicken_state[0] == 2                        # startled -> flee
 
 
+def test_scared_chicken_keeps_fleeing_after_snake_stops():
+    # FEAR PERSISTENCE: once a hen is fleeing, a snake that stops dead (speed 0) must NOT instantly
+    # calm it -- it keeps bolting for chicken_flee_persist steps. This kills the "spook the chicken,
+    # then freeze so it re-settles, then grab it" exploit.
+    w = World(CFG, seed=5, size=(120, 120))
+    w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
+    w.snakes[0].speed = CFG.v_snake                      # cruising -> scares the chicken
+    w.set_chickens([[46.0, 40.0]])                       # inside r_flee
+    w.chicken_state[0] = 1; w.chicken_timer[0] = 50      # walking -> flees
+    for _ in range(CFG.chicken_startle_steps + 1):       # get past the startle freeze -> actually bolting
+        w.update_chickens()
+    assert w.chicken_state[0] == 2
+    w.snakes[0].speed = 0.0                              # snake stops dead: a buggy FSM would re-calm it now
+    moved = 0
+    for _ in range(CFG.chicken_flee_persist - 1):        # still inside the panic window
+        before = w.chicken_pos[0].copy()
+        w.update_chickens()
+        if np.linalg.norm(w.chicken_pos[0] - before) > 1e-6:
+            moved += 1
+        assert w.chicken_state[0] == 2                    # STILL fleeing despite the stopped snake
+    assert moved >= 1                                     # and it actually kept bolting away
+    for _ in range(3):                                    # panic expires (snake still stopped) -> calms
+        w.update_chickens()
+    assert w.chicken_state[0] == 1                        # settled back to WALK
+
+
 def test_startle_freeze_then_bolts_at_v_flee():
     # Entering flee: FREEZE (speed 0) for chicken_startle_steps, THEN bolt away at v_flee.
     w = World(CFG, seed=4, size=(120, 120))
@@ -128,7 +154,8 @@ def test_startle_freeze_then_bolts_at_v_flee():
 
 
 def test_flee_settles_to_walk_when_snake_leaves():
-    # Threat gone -> resume WALK (not straight back to pecking under the snake's nose).
+    # Threat gone -> after the fear-persistence window runs out, resume WALK (not straight back to
+    # pecking under the snake's nose).
     w = World(CFG, seed=5, size=(120, 120))
     w.head = np.array([40.0, 40.0]); w.head_uw = w.head.copy()
     w.snakes[0].speed = CFG.v_snake                     # cruising -> prey senses it
@@ -137,8 +164,9 @@ def test_flee_settles_to_walk_when_snake_leaves():
     w.update_chickens()
     assert w.chicken_state[0] == 2                       # fleeing
     w.head = np.array([100.0, 100.0]); w.head_uw = w.head.copy()   # snake leaves (well beyond r_flee)
-    w.update_chickens()
-    assert w.chicken_state[0] == 1                       # settled to WALK
+    for _ in range(CFG.chicken_flee_persist + 2):        # keeps bolting through the panic window, then calms
+        w.update_chickens()
+    assert w.chicken_state[0] == 1                       # settled to WALK (not peck)
 
 
 def test_fsm_arrays_stay_consistent_after_eat():

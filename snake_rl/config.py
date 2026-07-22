@@ -30,11 +30,14 @@ class Config:
                                      # snake is THIS close (< r_flee_peck) -> the stalk-and-pounce catch window
     # behavior FSM (peck/walk/flee): a chicken pecks in place (prime catch window), ambles, then on
     # threat freezes in surprise for a beat and bolts. Durations in steps (staggered by rng at spawn).
-    chicken_peck_min: int = 12
-    chicken_peck_max: int = 35
+    chicken_peck_min: int = 6        # halved (was 12/35): the head-down stationary catch window is now
+    chicken_peck_max: int = 18       # shorter, so snakes can't lean on it (+ the speed/stop exploits)
     chicken_walk_min: int = 18
     chicken_walk_max: int = 45
     chicken_startle_steps: int = 4   # entering flee: FREEZE (speed 0) for this many steps, then bolt at v_flee
+    chicken_flee_persist: int = 15   # FEAR PERSISTENCE: a scared hen keeps bolting this many steps after the
+                                     # last time a snake was within reach, so a snake can't "un-spook" it by
+                                     # freezing (speed 0 -> alert 0). Re-armed every step a snake IS near.
     chicken_arrive_steps: int = 12   # a spawned chicken DROPS FROM THE SKY over this many steps (falling +
                                      # growing shadow) before it lands and becomes a real, huntable/sensed
                                      # chicken. Purely a spawn presentation: in-flight chickens live in a
