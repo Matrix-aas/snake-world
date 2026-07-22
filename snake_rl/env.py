@@ -10,17 +10,17 @@ from .selfplay import OpponentController
 
 
 def _make_observation_space(cfg):
-    """Bounds for the 87-float layout (sensors.observe), every signed/scaled channel enumerated
+    """Bounds for the 113-float layout (sensors.observe), every signed/scaled channel enumerated
     by index so a bound mistake fails `observation_space.contains` instead of silently clipping:
-      rays        0:63  9 x [dist, is_obstacle, is_chicken, is_self, is_other_body, is_egg,
-                              is_corpse] -> [0,1]
-      social     63:70  [has_rival, rel_pos_fwd, rel_pos_left, rival_heading_fwd,
+      rays        0:88  11 x [dist, is_obstacle, is_chicken, is_self, is_other_body, is_egg,
+                              is_corpse, obstacle_clearance] -> [0,1]
+      social     88:95  [has_rival, rel_pos_fwd, rel_pos_left, rival_heading_fwd,
                           rival_heading_left, size_ratio, rival_is_dashing]
-      egg        70:74  [has_egg, rel_pos_fwd, rel_pos_left, is_mine]
-      smell      74:83  [chicken_intensity, chicken_grad_fwd, chicken_grad_left,
+      egg        95:99  [has_egg, rel_pos_fwd, rel_pos_left, is_mine]
+      smell      99:108 [chicken_intensity, chicken_grad_fwd, chicken_grad_left,
                           snake_intensity, snake_grad_fwd, snake_grad_left,
                           corpse_intensity, corpse_grad_fwd, corpse_grad_left]
-      proprio    83:87  [energy, length, stamina, repro_ready] -> [0,1]
+      proprio   108:113 [energy, length, stamina, repro_ready, speed] -> [0,1]
 
     chicken/snake bounds are provably safe: `world.maybe_spawn` never lets the live chicken count
     exceed `chicken_ceiling`, and hatching refuses once `n_alive >= n_max` (world.py), so those raw
@@ -29,15 +29,15 @@ def _make_observation_space(cfg):
     bound. `sensors.smell` clips the corpse field to `chicken_ceiling` (matching magnitude/style of
     the other two) so this bound holds unconditionally rather than just "usually".
     """
-    assert OBS_DIM == 87, "observation_space layout is hand-enumerated for OBS_DIM=87"
+    assert OBS_DIM == 113, "observation_space layout is hand-enumerated for OBS_DIM=113"
     low = np.zeros(OBS_DIM, np.float32)
-    high = np.ones(OBS_DIM, np.float32)                          # default [0,1]: rays, one-hots, proprio,
-                                                                   # and the social/egg presence+ratio bits
-    SOC = 63
+    high = np.ones(OBS_DIM, np.float32)                          # default [0,1]: rays (incl. clearance),
+                                                                   # one-hots, proprio, presence+ratio bits
+    SOC = 88
     low[SOC + 1:SOC + 5] = -1.0; high[SOC + 1:SOC + 5] = 1.0      # rel_pos_fwd/left, rival_heading_fwd/left
-    EGG = 70
+    EGG = 95
     low[EGG + 1:EGG + 3] = -1.0; high[EGG + 1:EGG + 3] = 1.0      # rel_pos_fwd/left
-    SM = 74
+    SM = 99
     ceil, nmax = float(cfg.chicken_ceiling), float(cfg.n_max)
     low[SM] = 0.0;     high[SM] = ceil                            # chicken_intensity
     low[SM + 1] = -ceil; high[SM + 1] = ceil                      # chicken_grad_fwd
@@ -48,7 +48,7 @@ def _make_observation_space(cfg):
     low[SM + 6] = 0.0;   high[SM + 6] = ceil                      # corpse_intensity (clipped to ceil, see above)
     low[SM + 7] = -ceil; high[SM + 7] = ceil                      # corpse_grad_fwd
     low[SM + 8] = -ceil; high[SM + 8] = ceil                      # corpse_grad_left
-    assert SM + 9 == 83 and 83 + 4 == OBS_DIM                     # proprio 83:87 stays at the [0,1] default
+    assert SM + 9 == 108 and 108 + 5 == OBS_DIM                   # proprio 108:113 stays at the [0,1] default
     return spaces.Box(low, high, (OBS_DIM,), np.float32)
 
 
