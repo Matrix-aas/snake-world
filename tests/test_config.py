@@ -36,6 +36,20 @@ def test_self_collision_reachable():
     assert turn_circumference < c.length_cap   # a full curl fits inside the body -> head can hit itself
 
 
+def test_motion_collision_constants_present_and_sane():
+    c = CFG
+    assert c.speed_levels[0] == 0.0 and c.speed_levels[-1] == 1.0 and len(c.speed_levels) == 4
+    assert isinstance(c.stun_steps, int) and c.stun_steps >= 1
+    assert isinstance(c.n_fwd_rays, int) and c.n_fwd_rays >= 0
+
+
+def test_pitfall16_reward_constants_removed():
+    # the whole obstacle-reward machinery is gone (obstacles are solid-slide now, non-lethal)
+    assert not hasattr(CFG, "reward_death_obstacle")
+    assert not hasattr(CFG, "obs_avoid_weight")
+    assert not hasattr(CFG, "obs_avoid_range")
+
+
 def test_multisnake_invariants_hold():
     from snake_rl.config import CFG, assert_invariants
     assert_invariants(CFG)                                  # must not raise

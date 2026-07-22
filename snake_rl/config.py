@@ -20,6 +20,8 @@ class Config:
     v_snake: float = 1.0
     v_dash: float = 2.0
     turn_deg: float = 16.0            # sharp enough that a full curl (circumference ~22.5) fits under length_cap
+    speed_levels: tuple = (0.0, 1 / 3, 2 / 3, 1.0)  # cruise fractions of v_snake; dash overrides
+    stun_steps: int = 10             # dash into a solid -> frozen this many steps ("head spinning")
     # chickens
     v_wander: float = 0.25
     v_flee: float = 1.15
@@ -98,6 +100,7 @@ class Config:
     repro_length_min_easy: float = 6.0
     # sensing
     n_rays: int = 9
+    n_fwd_rays: int = 2              # extra forward rays; RAY_COUNT = n_rays + n_fwd_rays = 11
     fov_deg: float = 270.0           # total arc, centered forward (±135°)
     ray_range: float = 20.0
     frame_stack: int = 4
@@ -107,26 +110,11 @@ class Config:
     # reward
     reward_eat: float = 10.0
     reward_repro: float = 12.0
-    reward_death: float = -10.0
-    # Obstacle death costs MORE than other deaths (Pitfall 16): chasing a chicken flanked by rocks
-    # is a +EV gamble under a flat -10 (a +10 catch outweighs a 30%-ish crash risk), so the reward-
-    # optimal policy crashes on purpose and PBRS (policy-invariant) can't undo that — only a heavier
-    # crash cost flips the gamble negative-EV. Cause-specific so predation/self/starve stay at -10
-    # (we don't want to further suppress cut-off aggression, only the plow-into-rocks behavior).
-    reward_death_obstacle: float = -20.0
+    reward_death: float = -10.0      # flat cost on ANY death (starve / rival cut-off) -- obstacles and
+                                     # own body are now solid-slide, non-lethal, so no cause-specific cost
     step_penalty: float = 0.01
     dash_penalty: float = 0.0        # dashing is rationed by the stamina reserve itself (gate + slow regen),
                                      # so no extra reward penalty is needed (one over-suppresses hunting)
-    # obstacle-avoidance shaping (PBRS): a potential well around obstacles gives a continuous
-    # steer-away gradient the sparse -reward_death alone never provided (snakes plowed into rocks
-    # ~37% of deaths, because the chicken-seeking PBRS pulls straight through obstacles). PBRS is
-    # policy-invariant, so this cannot collapse hunting the way a raw per-step penalty does (Pitfall 1).
-    obs_avoid_weight: float = 0.7    # depth of the well at the lethal surface (obstacle_r + head_radius).
-                                     # 0.7 (was 1.5): 1.5 on an interrupted resume over-suppressed
-                                     # aggression (cut-off kills -71%, catch -21%) while only cutting
-                                     # obstacle-hazard -20%; ~0.5x the chicken-potential magnitude keeps
-                                     # avoidance without globally timid play (retuned per Pitfall 16).
-    obs_avoid_range: float = 8.0     # head-surface->obstacle-surface distance the well is felt within (0 beyond)
     catch_slack_k: float = 1.5
 
     @property
@@ -139,6 +127,11 @@ def assert_invariants(cfg: Config) -> None:
     assert cfg.v_dash > cfg.v_flee, "v_dash must exceed v_flee"
     # a pecking chicken is distracted: its startle range must be tighter than the walking alert range
     assert cfg.r_flee_peck < cfg.r_flee, "r_flee_peck must be smaller than r_flee (peck = distracted)"
+    # motion/collision: a stun lasts at least one step, cruise levels span 0 -> full v_snake, forward rays >= 0
+    assert cfg.stun_steps >= 1, "stun_steps must be at least 1"
+    assert cfg.speed_levels[0] == 0.0 and cfg.speed_levels[-1] == 1.0, \
+        "speed_levels must run from a full stop (0.0) to full cruise (1.0)"
+    assert cfg.n_fwd_rays >= 0, "n_fwd_rays must be non-negative"
     # (2) stamina budget closes the flee radius with slack
     budget = (cfg.s_max / cfg.stamina_drain) * (cfg.v_dash - cfg.v_flee)
     assert budget >= cfg.catch_slack_k * cfg.r_flee, "stamina budget too small for guaranteed catch"
