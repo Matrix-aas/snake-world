@@ -300,6 +300,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         paused = not paused
                     elif e.key == pygame.K_s:
                         renderer.toggle_sensors()
+                    elif e.key == pygame.K_h:
+                        renderer.toggle_rings()
                     elif e.key in (pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS):
                         sim_hz = min(60, sim_hz + 2)
                     elif e.key in (pygame.K_DOWN, pygame.K_MINUS):

@@ -99,10 +99,11 @@ def _lerp(a, b, t):
 
 
 class Renderer:
-    def __init__(self, scale=None, show_sensors=True, fullscreen=False, screen_size=None):
+    def __init__(self, scale=None, show_sensors=False, show_rings=False, fullscreen=False, screen_size=None):
         pygame.init()
         self.scale = scale
-        self.show_sensors = show_sensors
+        self.show_sensors = show_sensors      # vision-ray overlay (toggle key: S) -- OFF by default
+        self.show_rings = show_rings          # per-snake ring HUD circles (toggle key: H) -- OFF by default
         self.fullscreen = fullscreen
         self.screen_size = screen_size
         self.canvas = self.display = None
@@ -738,7 +739,8 @@ class Renderer:
             if b is None:
                 b = world._body_render_path_uw(s)
             self._draw_snake(world, s, b, big=big)
-            self._ring_hud(world, s, wrap(b[0], world.size), big=big)
+            if self.show_rings:
+                self._ring_hud(world, s, wrap(b[0], world.size), big=big)
             if big:
                 sensor_snake = (s, b)
         self._draw_particles()
@@ -758,6 +760,9 @@ class Renderer:
 
     def toggle_sensors(self):
         self.show_sensors = not self.show_sensors
+
+    def toggle_rings(self):
+        self.show_rings = not self.show_rings
 
     def close(self):
         pygame.quit()
