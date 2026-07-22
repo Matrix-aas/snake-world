@@ -251,9 +251,10 @@ def run_headless(model_path="models/snake.zip", seed=None, episodes=5, max_steps
     return metrics
 
 
-def _screen_fit_world_size(short=72.0):
+def _screen_fit_world_size(short=86.4):
     """World size (in sim units) whose aspect matches the desktop, short side fixed to `short`.
-    The net is size-agnostic (egocentric senses), so any size plays fine; `short` keeps density sane."""
+    The net is size-agnostic (egocentric senses), so any size plays fine; `short` keeps density sane.
+    86.4 = 72 * 1.2 -> ~20% bigger/roomier watch map than the original."""
     pygame.init()
     info = pygame.display.Info()
     sw, sh = info.current_w, info.current_h
@@ -271,7 +272,9 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
     rendering runs at `fps` and interpolates every live snake's body + the chickens (seam-aware)
     between steps for smooth motion.
     """
-    seed = seed if seed is not None else 0
+    # random map on every launch (so it's fresh each time, not the same fixed world); pass --seed
+    # for a reproducible one. The N key still steps forward from whatever seed we start on.
+    seed = seed if seed is not None else int.from_bytes(os.urandom(4), "little")
     world_size = screen_size = None
     if fullscreen:
         world_size, screen_size = _screen_fit_world_size()   # map fills the screen at its aspect

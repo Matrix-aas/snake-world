@@ -28,7 +28,8 @@ clutter (obstacles are solid but never lethal — no crashes) — not to be opti
 ```
 
 `./snake` is a launcher that creates `.venv` and installs deps on first run — never touch pip
-directly. Watch keys: `SPACE` pause · `N` new persistent world · `S` vision rays · `H` ring HUD
+directly. `watch` picks a **random map every launch** (`--seed N` for a fixed one) and fits a
+**~20%-roomier** world to the screen (`_screen_fit_world_size(short=86.4)`). Watch keys: `SPACE` pause · `N` new persistent world · `S` vision rays · `H` ring HUD
 (vision rays + ring HUD are **OFF by default** — S/H toggle them on) · `↑/↓` (or `+/-`)
 sim speed · `ESC` quit. (No deterministic toggle: the viewer drives **every** snake, including
 the legacy slot-0 "ego", through the same stochastic self-play controller — see below.)
