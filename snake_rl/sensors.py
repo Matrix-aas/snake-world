@@ -144,6 +144,10 @@ def _smell_field(world, head, positions):
         return 0.0, np.zeros(2)
     r = dist[keep]
     relv = rel[keep]
+    # ponytail: numpy sums <128 terms left-to-right (== the old per-target loop, bit-for-bit); above
+    # 128 it switches to pairwise summation -> at most a ULP (~1e-16) shift, still 7 orders under the
+    # 1e-9 parity gate and imperceptible to the policy. Chickens (chicken_ceiling) and rivals (n_max)
+    # are structurally capped far below 128; only an unbounded corpse pile could ever reach it.
     intensity = float((1.0 / (1.0 + r)).sum())
     grad = ((1.0 / (1.0 + r) ** 2)[:, None] * (relv / r[:, None])).sum(0)
     return intensity, grad

@@ -17,3 +17,18 @@ def test_train_smoke(tmp_path):
     train(total_steps=256, n_envs=1, model_path=str(model), reset=True, seed=0)
     assert model.exists()
     assert (tmp_path / "vecnormalize.pkl").exists()
+
+
+def test_anneal_hardness_curriculum_continuation():
+    # A curriculum-CONTINUING resume feeds AnnealHardness the ORIGINAL schedule denominator, so
+    # f(preserved_num_timesteps / curriculum_total) picks the ramp up exactly where it left off --
+    # NOT a jump to full hardness. Verify the ramp math at the endpoints + a resumed mid-point.
+    from snake_rl.train import AnnealHardness
+    from snake_rl.config import CFG
+    a = AnnealHardness(8_000_000, CFG.hardness_warmup, CFG.hardness_full)
+    assert a._hardness(0.30) == 0.0                       # still in warmup (< hardness_warmup) -> easy
+    assert a._hardness(0.90) == 1.0                       # past hardness_full -> fully hard
+    p = 6_000_000 / 8_000_000                             # a resume at 6M of the 8M schedule
+    expected = (p - CFG.hardness_warmup) / (CFG.hardness_full - CFG.hardness_warmup)
+    assert abs(a._hardness(p) - expected) < 1e-12
+    assert 0.0 < a._hardness(p) < 1.0                     # genuinely mid-ramp, continued (not a jump to 1.0)
