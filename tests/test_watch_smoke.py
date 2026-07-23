@@ -8,6 +8,7 @@ from snake_rl.watch import (rollout_once, run_headless, _step_world, _reseed_flo
                             _update_life_stats)
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
+from snake_rl.world import wrap, torus_dist
 from stable_baselines3 import PPO
 
 
@@ -98,33 +99,78 @@ def _bodies(w):
     return {s.id: w._body_render_path_uw(s) for s in w.snakes if s.alive}
 
 
-def test_camera_follow_cycle_and_death_linger():
-    # Phase B increment 1: follow tracks a snake; [/] cycle stable-by-id; a followed snake's death
-    # holds the camera at its death spot for DEATH_LINGER_S, then advances to the next live snake.
-    w = generate_world(CFG, seed=7, size=(140.0, 140.0), n_snakes=3)      # 3 live snakes
+def _settle(cam, w, r, frames=40, now=0.0, dt=0.1):
+    out = (None, None, None)
+    for _ in range(frames):
+        out = _camera_view(cam, w, _bodies(w), r, now=now, dt=dt)
+    return out
+
+
+def test_camera_follow_cycle_adaptive_zoom_ease_and_linger():
+    # Polish #1/#4: with no eggs the camera adopts a live snake, EASES toward its head (framerate-
+    # independent), auto-frames at a comfortable zoom (< the old 3.0 default), and on death holds at
+    # the death spot for DEATH_LINGER_S (keeping the fallen snake for its panel) then advances.
+    from snake_rl.render import Renderer
+    w = generate_world(CFG, seed=7, size=(150.0, 150.0), n_snakes=3)      # live, NO eggs
     ids = sorted(s.id for s in w.snakes if s.alive)
+    r = Renderer(scale=4); r.draw(w)                                       # sets cw/base for zoom_for_span
     cam = _new_camera(w)
-    assert cam["follow_id"] == ids[0] and cam["mode"] == "follow"
-    _, z = _camera_view(cam, w, _bodies(w), now=1.0)
-    assert z == cam["zoom"]
-    _cycle_follow(cam, w, +1); assert cam["follow_id"] == ids[1]          # next
-    _cycle_follow(cam, w, -1); assert cam["follow_id"] == ids[0]          # prev (wraps)
-    _camera_view(cam, w, _bodies(w), now=10.0)                            # record last_head while alive
-    last = cam["last_head"].copy()
-    next(s for s in w.snakes if s.id == cam["follow_id"]).alive = False   # kill the followed snake
-    c1, _ = _camera_view(cam, w, _bodies(w), now=10.2)                    # within linger -> hold
-    assert np.allclose(c1, last) and cam["follow_id"] == ids[0]
-    _camera_view(cam, w, _bodies(w), now=100.0)                           # linger elapsed -> advance
-    assert cam["follow_id"] in (ids[1], ids[2])
+    assert cam["follow_id"] is None and cam["watch_egg"] is None           # no eggs -> will adopt a live snake
+    _camera_view(cam, w, _bodies(w), r, now=0.0, dt=0.1)
+    assert cam["follow_id"] == ids[0]                                      # adopted the lowest-id live snake
+    head = np.asarray(wrap(next(s for s in w.snakes if s.id == ids[0]).head_uw, w.size), float)
+    c, z, fallen = _settle(cam, w, r)
+    assert float(torus_dist(c[None], head, w.size)[0]) < 1.0               # eased in to the head
+    assert 1.0 < z < 3.0 and fallen is None                               # zoomed OUT vs the old 3.0
+    _cycle_follow(cam, w, +1); assert cam["follow_id"] == ids[1]
+    _camera_view(cam, w, _bodies(w), r, now=1.0, dt=0.1)                  # record follow_snake=ids[1]
+    victim = next(s for s in w.snakes if s.id == ids[1]); victim.alive = False
+    _, _, f1 = _camera_view(cam, w, _bodies(w), r, now=10.0, dt=0.1)      # death -> linger starts
+    assert f1 is victim and cam["follow_id"] == ids[1]                    # panel still has the fallen snake
+    _, _, f2 = _camera_view(cam, w, _bodies(w), r, now=10.0 + DEATH_LINGER_S - 0.5, dt=0.1)
+    assert f2 is victim                                                    # still lingering
+    _camera_view(cam, w, _bodies(w), r, now=10.0 + DEATH_LINGER_S + 0.5, dt=0.1)
+    assert cam["follow_id"] in (ids[0], ids[2])                           # linger over -> advanced
+    r.close()
 
 
-def test_camera_overview_when_no_live_snakes():
-    # All-eggs viewer world (0 live): follow has no target -> whole-world overview at zoom 1, centered.
+def test_camera_egg_opening_and_hatch_handoff():
+    # Polish #2: opening frames the soonest egg (not overview), then hands off follow to the hatchling
+    # that appears at the egg once it's gone.
+    from snake_rl.render import Renderer
+    from snake_rl.world import Snake
     w = generate_world(CFG, seed=2, size=(120.0, 120.0), n_snakes=3, arrivals=True, ego_live=False)
+    assert len(w.eggs["pos"]) >= 1 and sum(1 for s in w.snakes if s.alive) == 0   # all-eggs start
+    r = Renderer(scale=4); r.draw(w)
     cam = _new_camera(w)
-    assert cam["follow_id"] is None
-    center, z = _camera_view(cam, w, {}, now=0.0)
-    assert z == 1.0 and np.allclose(center, np.asarray(w.size, float) / 2)
+    assert cam["watch_egg"] is not None and cam["follow_id"] is None      # opening watches an egg
+    egg = cam["watch_egg"].copy()
+    _camera_view(cam, w, {}, r, now=0.0, dt=0.1)
+    assert cam["follow_id"] is None                                       # still framing the egg
+    pos = egg.copy()                                                       # hatch: egg gone, snake at egg pos
+    w.snakes.append(Snake(head_uw=pos.copy(), head=wrap(pos, w.size), heading=0.0, path_uw=[pos.copy()],
+                          target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
+                          _prev_head_uw=pos.copy(), id=999, color_seed=999, lineage=42))
+    w.eggs["pos"] = np.zeros((0, 2))                                       # the watched egg is gone
+    _camera_view(cam, w, {}, r, now=1.0, dt=0.1)
+    assert cam["follow_id"] == 999 and cam["watch_egg"] is None           # handed off to the hatchling
+    r.close()
+
+
+def test_camera_overview_when_no_eggs_and_no_snakes():
+    # Only when there are neither eggs nor live snakes: overview eases toward world center at zoom 1.
+    from snake_rl.render import Renderer
+    w = generate_world(CFG, seed=7, size=(120.0, 120.0), n_snakes=3)      # live, no eggs
+    for s in w.snakes:
+        s.alive = False
+    w.eggs["pos"] = np.zeros((0, 2))
+    r = Renderer(scale=4); r.draw(w)
+    cam = _new_camera(w)
+    assert cam["watch_egg"] is None
+    c, z, fallen = _settle(cam, w, r, frames=80)
+    assert np.allclose(c, np.asarray(w.size, float) / 2, atol=1.0) and abs(z - 1.0) < 0.1
+    assert cam["follow_id"] is None and fallen is None
+    r.close()
 
 
 def test_life_stats_offspring_exact_and_kills_nearest_rival():

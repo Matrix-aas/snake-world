@@ -293,7 +293,11 @@ def _update_life_stats(stats, out, pre_heads, size):
 
 
 # --- viewer camera (free-pan + follow, Phase B increment 1) ---
-CAM_FOLLOW_ZOOM = 3.0       # default zoom when following a snake (overview forces zoom 1)
+CAM_FOLLOW_ZOOM = 2.0       # fallback manual follow zoom (auto-framing overrides it while auto_zoom on)
+CAM_EASE_K = 6.0            # camera-center ease rate per second (1-exp(-k*dt)): smooth catch-up
+CAM_ZOOM_EASE_K = 4.0       # zoom ease rate per second
+EGG_TRACK_R = 7.0           # world-units: an egg / its hatchling counts as "the watched egg" within this
+EGG_SPAN = 55.0            # world-units framed for the opening egg close-up
 PAN_UNITS_PER_SEC = 45.0    # free-pan speed at zoom 1 (scaled by 1/zoom so panning feels constant)
 DEATH_LINGER_S = 3.0        # hold the camera at a followed snake's death spot this long, then advance
 
@@ -302,15 +306,50 @@ def _live_ids(world):
     return sorted(s.id for s in world.snakes if s.alive)
 
 
-def _head_of(world, sid):
-    return next((s.head_uw for s in world.snakes if s.id == sid and s.alive), None)
+def _live_map(world):
+    return {s.id: s for s in world.snakes if s.alive}
+
+
+def _follow_span(snake):
+    """World-units to frame around a followed snake: its body length + generous headroom, so a good
+    action-cam shows the snake AND its surroundings (bigger snakes pull the camera out further)."""
+    return float(np.clip(3.0 * snake.target_length + 80.0, 100.0, 175.0))
+
+
+def _soonest_egg(world):
+    """The egg closest to hatching (the opening close-up's payoff comes soon), or None."""
+    e = world.eggs
+    if not len(e["pos"]):
+        return None
+    return np.asarray(wrap(e["pos"][int(np.argmin(e["timer"]))], world.size), float)
+
+
+def _egg_near(world, pos, r):
+    e = world.eggs
+    if pos is None or not len(e["pos"]):
+        return False
+    return bool(np.any(torus_dist(np.asarray(e["pos"], float), pos, world.size) <= r))
+
+
+def _nearest_live_near(world, pos, r):
+    best, bd = None, r
+    for s in world.snakes:
+        if not s.alive:
+            continue
+        d = float(torus_dist(pos[None], s.head_uw, world.size)[0])
+        if d <= bd:
+            best, bd = s, d
+    return best
 
 
 def _new_camera(world):
-    return {"mode": "follow", "zoom": CAM_FOLLOW_ZOOM,
-            "pan": np.asarray(world.size, float) / 2.0,
-            "follow_id": next((s.id for s in world.snakes if s.alive), None),
-            "last_head": None, "death_t": None}
+    """Opening shot: if any eggs exist, FRAME the soonest-to-hatch one (close-up), else fall to the
+    first live snake / overview. The eased zoom starts at 1 (whole-world) so the opening PUSHES IN."""
+    c = np.asarray(world.size, float) / 2.0
+    return {"mode": "follow", "zoom": CAM_FOLLOW_ZOOM, "auto_zoom": True,
+            "pan": c.copy(), "center": c.copy(), "zoom_eased": 1.0,
+            "follow_id": None, "watch_egg": _soonest_egg(world),
+            "follow_snake": None, "last_head": None, "death_t": None}
 
 
 def _cycle_follow(cam, world, delta):
@@ -322,36 +361,66 @@ def _cycle_follow(cam, world, delta):
     i = (ids.index(cam["follow_id"]) + delta) % len(ids) if cam["follow_id"] in ids else \
         (0 if delta >= 0 else len(ids) - 1)
     cam["follow_id"] = ids[i]
-    cam["death_t"] = None
+    cam["watch_egg"] = None; cam["death_t"] = None; cam["auto_zoom"] = True
 
 
-def _camera_view(cam, world, bodies, now):
-    """Resolve (cam_center_world, draw_zoom) for this frame and advance follow/linger state.
-    FREE: pan-driven center at the current zoom. FOLLOW: tracks the followed snake's interpolated
-    head; on its death, holds at the death spot for DEATH_LINGER_S then advances to the next live
-    snake (overview -- whole world at zoom 1 -- when nobody is left)."""
+def _resolve_target(cam, world, bodies, renderer, now):
+    """What the camera should FRAME this instant: (target_center_world, target_zoom, fallen_snake).
+    Precedence: live followed snake -> death-linger hold (keeps the fallen snake for its panel) ->
+    egg-watch (opening close-up, then hand off to the hatchling that appears at the egg) -> adopt any
+    live snake -> whole-world overview."""
     if cam["mode"] == "free":
-        return cam["pan"], cam["zoom"]
-    ids = _live_ids(world)
+        return cam["pan"], cam["zoom"], None
+    live = _live_map(world)
+
+    def frame_snake(s):
+        cam["follow_snake"] = s; cam["death_t"] = None; cam["watch_egg"] = None
+        h = bodies.get(s.id, [s.head_uw])[0]
+        cam["last_head"] = np.asarray(wrap(h, world.size), float)
+        z = renderer.zoom_for_span(_follow_span(s), cam["zoom"]) if cam["auto_zoom"] else cam["zoom"]
+        return cam["last_head"], z, None
+
     fid = cam["follow_id"]
-
-    def head_center(sid):
-        h = bodies[sid][0] if sid in bodies else _head_of(world, sid)
-        cam["last_head"] = np.asarray(wrap(h, world.size), float) if h is not None else cam["last_head"]
-        return cam["last_head"]
-
-    if fid in ids:
-        cam["death_t"] = None
-        return head_center(fid), cam["zoom"]
+    if fid in live:
+        return frame_snake(live[fid])
     if fid is not None and cam["death_t"] is None:
         cam["death_t"] = now                                  # followed snake just died -> start linger
     if cam["death_t"] is not None and now - cam["death_t"] < DEATH_LINGER_S and cam["last_head"] is not None:
-        return cam["last_head"], cam["zoom"]                  # hold at the death spot
-    cam["follow_id"] = ids[0] if ids else None                # linger over -> advance to next live snake
-    cam["death_t"] = None
-    if cam["follow_id"] is not None:
-        return head_center(cam["follow_id"]), cam["zoom"]
-    return np.asarray(world.size, float) / 2.0, 1.0           # nobody alive -> whole-world overview
+        fs = cam["follow_snake"]
+        zt = renderer.zoom_for_span(_follow_span(fs), cam["zoom"]) if fs is not None else cam["zoom"]
+        return cam["last_head"], zt, fs                       # hold at the death spot, keep the panel
+    egg = cam["watch_egg"]                                     # need a fresh target
+    if egg is not None:
+        if _egg_near(world, egg, EGG_TRACK_R):
+            return egg, renderer.zoom_for_span(EGG_SPAN, cam["zoom"]), None       # frame the egg
+        hatch = _nearest_live_near(world, egg, EGG_TRACK_R)   # egg gone -> hand off to its hatchling
+        if hatch is not None:
+            cam["follow_id"] = hatch.id; cam["auto_zoom"] = True
+            return frame_snake(hatch)
+        cam["watch_egg"] = None                               # egg vanished with no nearby hatchling
+    if live:
+        s = live[min(live)]; cam["follow_id"] = s.id; cam["auto_zoom"] = True
+        return frame_snake(s)
+    cam["follow_id"] = None
+    return np.asarray(world.size, float) / 2.0, 1.0, None     # nobody alive, no eggs -> overview
+
+
+def _camera_view(cam, world, bodies, renderer, now, dt):
+    """Resolve the frame's target then EASE toward it, framerate-independently (1-exp(-k*dt)), so the
+    camera smoothly catches up instead of hard-snapping. The center eases toward the NEAREST-IMAGE
+    target so it never whips across a torus seam. FREE pan is user-driven, so it snaps (no lag).
+    Returns (cam_center_world, draw_zoom, fallen_snake)."""
+    dt = float(min(max(dt, 0.0), 0.1))                        # clamp (a long stall shouldn't teleport)
+    tgt, tz, fallen = _resolve_target(cam, world, bodies, renderer, now)
+    tgt = np.asarray(tgt, float)
+    if cam["mode"] == "free":
+        cam["center"] = tgt.copy()
+    else:
+        a = 1.0 - np.exp(-CAM_EASE_K * dt)
+        d = torus_delta(tgt, cam["center"], world.size)
+        cam["center"] = wrap(cam["center"] + d * a, world.size)
+    cam["zoom_eased"] += (float(tz) - cam["zoom_eased"]) * (1.0 - np.exp(-CAM_ZOOM_EASE_K * dt))
+    return cam["center"], float(np.clip(cam["zoom_eased"], ZOOM_MIN, ZOOM_MAX)), fallen
 
 
 def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fullscreen=True):
@@ -392,6 +461,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                     running = False
                 elif e.type == pygame.MOUSEWHEEL:
                     cam["zoom"] = float(np.clip(cam["zoom"] * (1.12 ** e.y), ZOOM_MIN, ZOOM_MAX))
+                    cam["auto_zoom"] = False                  # manual zoom overrides action-cam framing
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_ESCAPE:
                         running = False
@@ -405,8 +475,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         renderer.toggle_inspector()
                     elif e.key == pygame.K_TAB:               # free <-> follow
                         if cam["mode"] == "follow":
-                            seed_c = cam["last_head"] if cam["last_head"] is not None else world.size / 2
-                            cam["pan"] = np.asarray(seed_c, float).copy(); cam["mode"] = "free"
+                            cam["pan"] = np.asarray(cam["center"], float).copy(); cam["mode"] = "free"
                         else:
                             cam["mode"] = "follow"; cam["death_t"] = None
                     elif e.key == pygame.K_LEFTBRACKET:
@@ -415,8 +484,10 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         _cycle_follow(cam, world, +1)
                     elif e.key in (pygame.K_EQUALS, pygame.K_PLUS):
                         cam["zoom"] = float(np.clip(cam["zoom"] * 1.25, ZOOM_MIN, ZOOM_MAX))
+                        cam["auto_zoom"] = False
                     elif e.key == pygame.K_MINUS:
                         cam["zoom"] = float(np.clip(cam["zoom"] / 1.25, ZOOM_MIN, ZOOM_MAX))
+                        cam["auto_zoom"] = False
                     elif e.key == pygame.K_PERIOD:            # sim speed (rebound off the arrows)
                         sim_hz = min(60, sim_hz + 2)
                     elif e.key == pygame.K_COMMA:
@@ -436,7 +507,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                 dx = keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]
                 dy = keys[pygame.K_DOWN] - keys[pygame.K_UP]
                 if dx or dy:
-                    step = PAN_UNITS_PER_SEC * frame_dt / cam["zoom"]
+                    step = PAN_UNITS_PER_SEC * frame_dt / max(1e-6, cam["zoom_eased"])
                     cam["pan"] = wrap(cam["pan"] + np.array([dx, dy], float) * step, world.size)
             interval = 1.0 / sim_hz
             if not paused:
@@ -453,7 +524,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
             f = 0.0 if paused else min(1.0, since / interval)
             bodies = _interp_bodies(prev_bodies, cur_bodies, f)
             cpos, cdir = _interp_chickens(prev_ch, cur_ch, f, world.size)
-            cam_center, draw_zoom = _camera_view(cam, world, bodies, pygame.time.get_ticks() / 1000.0)
+            cam_center, draw_zoom, _fallen = _camera_view(
+                cam, world, bodies, renderer, pygame.time.get_ticks() / 1000.0, frame_dt)
             renderer.draw(world, bodies, cpos, cdir, follow_id=cam["follow_id"],
                           cam_center=cam_center, zoom=draw_zoom, inspector_stats=life_stats)
     finally:

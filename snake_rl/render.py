@@ -998,6 +998,13 @@ class Renderer:
     def toggle_inspector(self):
         self.show_inspector = not self.show_inspector
 
+    def zoom_for_span(self, span, default=1.0):
+        """The zoom that frames `span` world-units across the SHORTER canvas axis (action-cam
+        framing). Returns `default` until the display is set up (cw unknown before the first draw)."""
+        if not self.cw or not self._base_scale or span <= 0:
+            return default
+        return float(np.clip(min(self.cw, self.ch) / (self._base_scale * span), ZOOM_MIN, ZOOM_MAX))
+
     def close(self):
         pygame.quit()
 
