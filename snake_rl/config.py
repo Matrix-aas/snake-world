@@ -126,6 +126,31 @@ class Config:
     dash_penalty: float = 0.0        # dashing is rationed by the stamina reserve itself (gate + slow regen),
                                      # so no extra reward penalty is needed (one over-suppresses hunting)
     catch_slack_k: float = 1.5
+    # --- genome gene->stat interpolation ranges (spec §2.1; HARD gates §2.4) ---
+    gene_size_len_lo: float = 0.65
+    gene_size_len_hi: float = 1.35
+    gene_size_turn_lo: float = 0.85
+    gene_size_turn_hi: float = 1.15      # precision-gate cap (turn_deg*1.15 < 18.92 deg)
+    gene_size_hunger_hi: float = 0.4     # bigger body => +up to 0.4x extra energy_decay
+    gene_metab_lo: float = 0.65
+    gene_metab_hi: float = 1.5
+    gene_speed_lo: float = 0.85
+    gene_speed_hi: float = 1.2
+    gene_stamina_lo: float = 0.7
+    gene_stamina_hi: float = 1.4
+    gene_stamina_regen_lo: float = 0.7
+    gene_stamina_regen_hi: float = 1.4
+    gene_rayrange_lo: float = 14.0
+    gene_rayrange_hi: float = 26.0
+    gene_smell_lo: float = 1.4           # high senses => LOW smell reach (inverse trade)
+    gene_smell_hi: float = 0.7
+    gene_lifespan_lo: float = 900.0
+    gene_lifespan_hi: float = 3200.0
+    # --- evolution / reproduction / aging ---
+    mutation_sigma: float = 0.05
+    lifespan_jitter: float = 0.15        # +/- fraction on max_lifespan at birth
+    repro_length_frac: float = 0.55      # mating length gate = frac * own max_length
+    reward_egg_lost: float = 0.0         # DEFAULT OFF for the discovery retrain (Pitfall-1 cousin)
 
     @property
     def eat_radius(self) -> float:
@@ -181,5 +206,28 @@ def assert_invariants(cfg: Config) -> None:
                     body_area, world_area)
 
 
+def assert_invariants_over_genome(cfg: Config) -> None:
+    """HARD gates that must hold for EVERY genome (spec §2.4): aiming precision at max size,
+    raycast validity at max ray_range. Stamina-budget & self-collision are SOFT (single-strategy
+    relics: own-body non-lethal, peck-hunting needs no dash) -- logged, never fatal."""
+    from .genome import resolve_phenotype, GENE_COUNT
+    import numpy as _np
+    # HARD 1: precision at the coarsest turn (max size gene)
+    hi_turn = cfg.turn_deg * cfg.gene_size_turn_hi
+    assert math.radians(hi_turn) / 2 < math.atan(cfg.eat_radius / cfg.r_flee), \
+        f"max-size turn_deg {hi_turn:.2f} too coarse to aim (precision gate)"
+    # HARD 2: nearest-image raycast at the longest ray_range (max senses gene)
+    assert cfg.gene_rayrange_hi + cfg.obstacle_radius_max + cfg.head_radius < cfg.world_size_min / 2, \
+        "max ray_range too large for nearest-image raycast on the smallest world"
+    # SOFT: report worst-corner stamina budget & self-collision reachability
+    g_lo = _np.zeros(GENE_COUNT); g_hi = _np.ones(GENE_COUNT)
+    p_weak = resolve_phenotype(_np.array([0, 0, 0, 0, 0, 0, 0, 0, 0], float), cfg)  # slow, low stamina
+    budget = (p_weak.s_max / cfg.stamina_drain) * (p_weak.v_dash - cfg.v_flee)
+    if budget < cfg.catch_slack_k * cfg.r_flee:
+        log.info("gene box: weakest genome is ambush-only (dash budget %.1f < %.1f) -- expected, soft",
+                 budget, cfg.catch_slack_k * cfg.r_flee)
+
+
 CFG = Config()
 assert_invariants(CFG)
+assert_invariants_over_genome(CFG)

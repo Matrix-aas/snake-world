@@ -1,5 +1,24 @@
+import math
 import numpy as np
 from snake_rl import genome as gm
+from snake_rl.config import CFG
+
+
+def test_phenotype_extremes_differ_and_are_ordered():
+    lo = np.zeros(gm.GENE_COUNT, np.float32)
+    hi = np.ones(gm.GENE_COUNT, np.float32)
+    plo = gm.resolve_phenotype(lo, CFG)
+    phi = gm.resolve_phenotype(hi, CFG)
+    assert phi.max_length > plo.max_length
+    assert phi.v_dash > plo.v_dash
+    assert phi.max_lifespan_base > plo.max_lifespan_base
+    # senses trades: high senses => long sight, weak smell reach
+    assert phi.ray_range > plo.ray_range
+    assert phi.smell_reach < plo.smell_reach
+    # precision-capped turn stays aimable at both extremes
+    from snake_rl.config import CFG as c
+    limit = math.degrees(2 * math.atan(c.eat_radius / c.r_flee))
+    assert plo.turn_deg < limit and phi.turn_deg < limit
 
 
 def test_sample_shape_and_range():

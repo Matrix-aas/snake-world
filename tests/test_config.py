@@ -1,10 +1,14 @@
 import math
 import pytest
-from snake_rl.config import Config, CFG, assert_invariants
+from snake_rl.config import Config, CFG, assert_invariants, assert_invariants_over_genome
 
 
 def test_default_config_satisfies_invariants():
     assert_invariants(CFG)  # must not raise
+
+
+def test_invariants_hold_across_gene_box():
+    assert_invariants_over_genome(CFG)   # HARD gates must not raise
 
 
 def test_catch_invariant_math():
