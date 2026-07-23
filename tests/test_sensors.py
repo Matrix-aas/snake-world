@@ -3,6 +3,7 @@ from snake_rl.config import CFG
 from snake_rl.world import World, Snake, wrap
 from snake_rl.worldgen import generate_world
 from snake_rl.sensors import observe, sense_vision, smell, ray_dirs, OBS_DIM
+from snake_rl import genome as gm
 
 
 def straight_world():
@@ -55,8 +56,10 @@ def test_center_ray_sees_obstacle_ahead():
     v = sense_vision(w)
     center = v[CFG.n_rays // 2]
     assert center[1] == 1.0                       # obstacle channel
-    # distance until the head EDGE touches: 40 - (obstacle_r + head_radius) - 30, normalized
-    assert abs(center[0] - (40 - 1 - CFG.head_radius - 30) / CFG.ray_range) < 1e-2
+    # distance until the head EDGE touches: 40 - (obstacle_r + head_radius) - 30, normalized by the
+    # snake's OWN per-genome ray_range (not the global CFG.ray_range -- founders carry random genomes)
+    ray_range = w.snakes[0].phenotype.ray_range
+    assert abs(center[0] - (40 - 1 - CFG.head_radius - 30) / ray_range) < 1e-2
 
 
 def test_empty_ray_encoding():
@@ -251,6 +254,33 @@ def test_observation_space_contains_crowded_stress_world():
     for s in w.snakes:
         o = observe(w, s)
         assert env.observation_space.contains(o), f"snake {s.id} obs out of bounds"
+
+
+def test_long_sight_genome_sees_farther_and_obs_in_bounds():
+    w = generate_world(CFG, seed=5, n_snakes=1)
+    hi = np.zeros(gm.GENE_COUNT, np.float32); hi[gm.SENSES] = 1.0   # long ray_range, weak smell
+    w.snakes[0] = w._make_snake(w.snakes[0].head, 0.0, genome=hi, sex=0, lineage=1,
+                                id=w.snakes[0].id, color_seed=1, energy=CFG.energy_max,
+                                target_length=CFG.start_length, rng=w.rng)
+    ph = w._phenotype_of(w.snakes[0])
+    assert ph.ray_range == CFG.gene_rayrange_hi
+    obs = observe(w, w.snakes[0])
+    assert np.isfinite(obs).all()
+
+
+def test_high_smell_genome_intensity_stays_within_bound():
+    # a max-smell-reach genome must NOT blow the observation bound (§7 smell clip fix)
+    from snake_rl.env import SnakeEnv
+    env = SnakeEnv(seed=1)
+    env.reset()                                # world is None until reset() (review C3)
+    lo = np.zeros(gm.GENE_COUNT, np.float32)   # senses=0 => max smell reach (1.4x)
+    w = env.world
+    s = w.snakes[0]
+    w.snakes[0] = w._make_snake(s.head, 0.0, genome=lo, sex=0, lineage=1, id=s.id,
+                                color_seed=1, energy=CFG.energy_max,
+                                target_length=CFG.start_length, rng=w.rng)
+    obs = observe(w, w.snakes[0])
+    assert env.observation_space.contains(obs.astype(np.float32))
 
 
 def test_observation_space_contains_corpse_pileup_beyond_ceiling():

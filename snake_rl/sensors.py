@@ -97,7 +97,8 @@ def _scan(world, head, heading, snake=None):
     rad = rad + c.head_radius                            # inflate by head radius (Minkowski): rays report
     dirs = ray_dirs(c, heading)                          # distance until the head EDGE touches -> the snake
     n_obs = len(world.obstacle_pos)                      # obstacles are cols 0..n_obs of _all_targets
-    dist, idx, clear = _cast(dirs, head, world.size, cen, rad, c.ray_range, n_obs)  # perceives own width
+    ray_range = snake.phenotype.ray_range                # per-snake sight (genome SENSES gene)
+    dist, idx, clear = _cast(dirs, head, world.size, cen, rad, ray_range, n_obs)  # perceives own width
     kinds = np.full(len(dirs), -1, int)
     got = idx >= 0
     kinds[got] = kind[idx[got]]
@@ -105,14 +106,14 @@ def _scan(world, head, heading, snake=None):
 
 
 def sense_vision(world, snake=None):
-    c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
+    ray_range = snake.phenotype.ray_range                # per-snake sight (genome SENSES gene)
     dirs, dist, kinds, clear = _scan(world, snake.head, snake.heading, snake)
     out = np.tile([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (len(dirs), 1))   # 8 features/ray
     hit = kinds >= 0
-    out[hit, 0] = dist[hit] / c.ray_range
+    out[hit, 0] = dist[hit] / ray_range
     out[hit, 1 + kinds[hit]] = 1.0
-    out[:, 7] = clear / c.ray_range                      # un-mask: nearest obstacle on this bearing
+    out[:, 7] = clear / ray_range                         # un-mask: nearest obstacle on this bearing
     return out
 
 
@@ -156,6 +157,7 @@ def _smell_field(world, head, positions):
 def smell(world, snake=None):
     c = world.cfg
     snake = snake if snake is not None else world.snakes[0]
+    reach = snake.phenotype.smell_reach                  # per-snake smell strength (genome SENSES gene)
     fwd = snake.heading_vec()
     left = np.array([-fwd[1], fwd[0]])
     ci, cg = _smell_field(world, snake.head, world.chicken_pos)
@@ -163,14 +165,21 @@ def smell(world, snake=None):
     si, sg = _smell_field(world, snake.head, rival_heads)
     ki, kg = _smell_field(world, snake.head, world.corpses["pos"])
     # ponytail: chicken/rival counts are structurally capped elsewhere (chicken_ceiling, n_max), so
-    # their raw intensity is already provably within the obs bound. Corpses have no such cap (they
-    # persist until eaten) -- clip to chicken_ceiling so observation_space.contains always holds
-    # regardless of how many uneaten corpses pile up.
+    # their raw intensity was previously provably within the obs bound with no clip needed. A per-snake
+    # smell_reach up to 1.4x (genome SENSES gene) can now push a scaled intensity past that structural
+    # cap, so every field is clipped the same way corpses already were (corpses have no population cap
+    # at all -- persist until eaten -- so they needed it regardless of reach).
     ceil = float(c.chicken_ceiling)
-    ki = float(np.clip(ki, 0.0, ceil))
-    kf = float(np.clip(kg @ fwd, -ceil, ceil))
-    kl = float(np.clip(kg @ left, -ceil, ceil))
-    return np.array([ci, cg @ fwd, cg @ left, si, sg @ fwd, sg @ left, ki, kf, kl], np.float32)
+    ci = float(np.clip(ci * reach, 0.0, ceil))
+    cf = float(np.clip((cg @ fwd) * reach, -ceil, ceil))
+    cl = float(np.clip((cg @ left) * reach, -ceil, ceil))
+    si = float(np.clip(si * reach, 0.0, ceil))
+    sf = float(np.clip((sg @ fwd) * reach, -ceil, ceil))
+    sl = float(np.clip((sg @ left) * reach, -ceil, ceil))
+    ki = float(np.clip(ki * reach, 0.0, ceil))
+    kf = float(np.clip((kg @ fwd) * reach, -ceil, ceil))
+    kl = float(np.clip((kg @ left) * reach, -ceil, ceil))
+    return np.array([ci, cf, cl, si, sf, sl, ki, kf, kl], np.float32)
 
 
 def _social(world, snake):
