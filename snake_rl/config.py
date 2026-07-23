@@ -10,12 +10,12 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class Config:
     # world
-    world_size_min: float = 110.0
-    world_size_max: float = 160.0
+    world_size_min: float = 180.0
+    world_size_max: float = 260.0
     # population
-    n_start_min: int = 2
-    n_start_max: int = 4
-    n_max: int = 6
+    n_start_min: int = 3
+    n_start_max: int = 6
+    n_max: int = 12
     # snake motion
     v_snake: float = 1.0
     v_dash: float = 2.0
@@ -47,7 +47,7 @@ class Config:
     # food, population-scaled (rates; Task 9 derives the live target from snake count)
     chickens_per_snake_max: float = 2.0
     chickens_per_snake_min: float = 1.0
-    chicken_ceiling: int = 12        # hard cap regardless of population
+    chicken_ceiling: int = 24        # hard cap regardless of population
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
@@ -71,9 +71,8 @@ class Config:
     segment_spacing: float = 0.6
     obstacle_radius_min: float = 1.5
     obstacle_radius_max: float = 4.0
-    n_obstacles_min: int = 12         # doubled (was 6/16): obstacles are non-lethal solids now, so a
-    n_obstacles_max: int = 32         # denser world reads richer + invites new tactics (herd prey into
-                                      # clutter, weave through cover) without just killing snakes.
+    n_obstacles_min: int = 24         # doubled again (was 12/32) for Task 11's larger world/population
+    n_obstacles_max: int = 64         # (n_max 6->12): keep obstacle DENSITY ~constant on the bigger map.
     # energy (hunger — not lethal)
     energy_max: float = 100.0
     energy_decay: float = 0.20        # 0.20 (0.05 -> 0.10 -> 0.20): life-without-food now 500 steps (was

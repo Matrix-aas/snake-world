@@ -57,10 +57,18 @@ def test_pitfall16_reward_constants_removed():
 def test_multisnake_invariants_hold():
     from snake_rl.config import CFG, assert_invariants
     assert_invariants(CFG)                                  # must not raise
-    assert CFG.world_size_min == 110.0 and CFG.n_max == 6
+    assert CFG.world_size_min == 180.0 and CFG.n_max == 12
     # mating distance lets two snakes coexist without a forced cut-off
     assert CFG.r_mate >= 2 * CFG.head_radius
     # a just-qualified snake can pay the repro cost and survive
     assert CFG.repro_cost < CFG.repro_energy_frac * CFG.energy_max
     # food ceiling covers the population-scaled max
     assert CFG.chicken_ceiling >= CFG.chickens_per_snake_max * CFG.n_max
+
+
+def test_scaled_population_invariants():
+    assert CFG.n_max == 12
+    # food ceiling still covers max demand (invariant 10)
+    assert CFG.chicken_ceiling >= CFG.chickens_per_snake_max * CFG.n_max
+    assert_invariants(CFG)
+    assert_invariants_over_genome(CFG)
