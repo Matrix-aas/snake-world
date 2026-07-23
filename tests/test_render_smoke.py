@@ -170,6 +170,25 @@ def test_inspector_overlay_renders_for_followed_snake():
     r.close()
 
 
+def test_fx_stun_courtship_and_guarded_egg_render():
+    # Phase B increment 4: a stunned snake (dizzy stars), a courting pair (world._mate_streak read
+    # read-only -> hearts), a guarded repro egg (owner>=0 glow) and an arrival egg (owner -1, no glow)
+    # must all render without crashing. The courtship read is a viewer-only read; mating logic untouched.
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
+    a, b = w.snakes[0], w.snakes[1]
+    a.stun = CFG.stun_steps                                       # dizzy
+    b.head_uw = a.head_uw + np.array([CFG.r_mate * 0.5, 0.0]); b.head = wrap(b.head_uw, w.size)
+    w._mate_streak = {frozenset((a.id, b.id)): 2}                 # a courting pair (read-only in render)
+    w.eggs = {"pos": np.array([[60.0, 60.0], [40.0, 40.0]]), "timer": np.array([20.0, 20.0]),
+              "owner": np.array([[a.id, b.id], [-1, -1]])}        # guarded repro egg + arrival egg
+    r = Renderer(scale=5)
+    r._clock_override = 0.3
+    r.draw(w, follow_id=a.id, cam_center=tuple(a.head_uw), zoom=3.0)   # must not raise
+    del w._mate_streak                                            # no courting state -> no-op path
+    r.draw(w)
+    r.close()
+
+
 def test_render_sensors_handle_corpse_ray_kind():
     # Force a ray to hit a corpse (kind 5) -- KeyErrors if RAY_KIND isn't extended for it.
     from snake_rl.sensors import vision_distances

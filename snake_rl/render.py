@@ -16,7 +16,7 @@ import os
 import numpy as np
 import pygame
 from .sensors import vision_distances
-from .world import wrap
+from .world import wrap, torus_delta
 
 SS = 2                   # supersample factor (draw big, smoothscale down for anti-aliasing)
 TARGET_PX = 860          # display fits ~this many pixels on its long side
@@ -317,6 +317,71 @@ class Renderer:
             self._sprite_cache[key] = s
         return s
 
+    def _star_sprite(self, r, alpha):
+        """Small yellow 5-point star for the stun 'dizzy' orbit (Phase B increment 4)."""
+        r = max(2, int(r)); alpha = min(255, max(0, int(alpha)) // 16 * 16)
+        key = ("star", r, alpha)
+        s = self._sprite_cache.get(key)
+        if s is None:
+            s = pygame.Surface((2 * r, 2 * r), pygame.SRCALPHA)
+            pts = [(r + np.cos(-np.pi / 2 + i * np.pi / 5) * (r if i % 2 == 0 else r * 0.42),
+                    r + np.sin(-np.pi / 2 + i * np.pi / 5) * (r if i % 2 == 0 else r * 0.42))
+                   for i in range(10)]
+            pygame.draw.polygon(s, (255, 236, 130, alpha), pts)
+            s = s.convert_alpha()
+            self._sprite_cache[key] = s
+        return s
+
+    def _heart_sprite(self, r, alpha):
+        """Pink heart (two lobes + a point) for courtship (Phase B increment 4)."""
+        r = max(3, int(r)); alpha = min(255, max(0, int(alpha)) // 16 * 16)
+        key = ("heart", r, alpha)
+        s = self._sprite_cache.get(key)
+        if s is None:
+            d = 2 * r
+            s = pygame.Surface((d, d), pygame.SRCALPHA)
+            col = (240, 96, 128, alpha)
+            lobe = max(2, int(r * 0.55)); cy = int(r * 0.72)
+            pygame.draw.circle(s, col, (int(r - lobe * 0.62), cy), lobe)
+            pygame.draw.circle(s, col, (int(r + lobe * 0.62), cy), lobe)
+            pygame.draw.polygon(s, col, [(int(r - lobe * 1.15), int(cy + lobe * 0.3)),
+                                         (int(r + lobe * 1.15), int(cy + lobe * 0.3)),
+                                         (r, int(d * 0.92))])
+            s = s.convert_alpha()
+            self._sprite_cache[key] = s
+        return s
+
+    def _draw_dizzy(self, pos, hr, stun, stun_max):
+        """Spinning stars circling a stunned snake's head (fades as stun counts down)."""
+        frac = float(np.clip(stun / max(1, stun_max), 0.0, 1.0))
+        alpha = int(110 + 130 * frac)
+        star = self._star_sprite(max(3, int(hr * 0.5 * self._scale)), alpha)
+        orbit = hr * 1.4 * self._scale
+        above = hr * 1.7 * self._scale
+        for i in range(3):
+            a = self._clock * 6.0 + i * (2 * np.pi / 3)
+            self._blit_world(star, pos, off=(np.cos(a) * orbit, np.sin(a) * orbit * 0.5 - above))
+
+    def _draw_courtship(self, world):
+        """Pulsing hearts between a courting pair. Reads world._mate_streak READ-ONLY (a pair holding
+        mating distance has streak >= 1) -- no change to mating logic. A no-op when nobody's courting."""
+        ms = getattr(world, "_mate_streak", None)
+        if not ms:
+            return
+        live = {s.id: s for s in world.snakes if s.alive}
+        hr = world.cfg.head_radius
+        pulse = 0.6 + 0.4 * np.sin(self._clock * 4.0)
+        heart = self._heart_sprite(max(4, int(hr * 1.1 * self._scale)), int(150 + 90 * pulse))
+        for key, streak in ms.items():
+            if streak < 1:
+                continue
+            ids = tuple(key)
+            a, b = (live.get(ids[0]), live.get(ids[1])) if len(ids) == 2 else (None, None)
+            if a is None or b is None:
+                continue
+            mid = wrap(a.head_uw + torus_delta(b.head_uw, a.head_uw, world.size) / 2, world.size)
+            self._blit_world(heart, mid, off=(0, -hr * (0.8 + 0.6 * pulse) * self._scale))
+
     def _anim_frame(self, nframes, fps, phase=0.0):
         """Which sheet frame to show now: wall-clock time * fps, +phase (a per-entity offset so
         entities don't animate in lockstep), wrapped to [0, nframes). Smooth at any sim speed."""
@@ -476,11 +541,16 @@ class Renderer:
         if not len(e["pos"]):
             return
         c = world.cfg
+        owners = e.get("owner")
         pulse = 0.94 + 0.06 * np.sin(self._clock * 2.2)              # gentle clock-driven breathing
-        for pos, timer in zip(e["pos"], e["timer"]):
+        glow_a = int(60 + 40 * (0.5 + 0.5 * np.sin(self._clock * 3.0)))
+        for i, (pos, timer) in enumerate(zip(e["pos"], e["timer"])):
             p = wrap(pos, world.size)
             r = c.egg_radius * pulse
             rp = max(2, int(r * self._scale))
+            guarded = owners is not None and i < len(owners) and owners[i][0] >= 0   # repro egg (owner>=0)
+            if guarded:                                             # arrival eggs (owner -1) get no glow
+                self._blit_world(self._dot(max(3, int(r * 2.1 * self._scale)), (240, 210, 130), glow_a), p)
             self._shadow(p, rp)
             about_to_hatch = timer <= 6
             s = self._sprite("egg_cracked" if about_to_hatch else "egg", 2.6 * r * self._scale,
@@ -638,6 +708,8 @@ class Renderer:
                 e = head + d * hr * 0.32 + perp * hr * 0.46 * s2
                 pygame.draw.circle(self.canvas, SNAKE_EYE, self._p(e), max(2, int(hr * 0.3 * self._scale)))
                 pygame.draw.circle(self.canvas, PUPIL, self._p(e + d * hr * 0.13), max(1, int(hr * 0.15 * self._scale)))
+        if snake.stun > 0:                                 # dizzy: stars spin over a stunned head
+            self._draw_dizzy(head, hr, snake.stun, world.cfg.stun_steps)
 
     def _ring_hud(self, world, snake, head_pos, big=False):
         """Per-snake 3-ring badge above the head: outer=energy(green), middle=stamina(cyan),
@@ -874,6 +946,7 @@ class Renderer:
             if big:
                 sensor_snake = (s, b)
                 follow_snake = s
+        self._draw_courtship(world)                                  # hearts between courting pairs
         self._draw_particles()
         self._draw_motes(world)
         if self.show_sensors and sensor_snake is not None:
