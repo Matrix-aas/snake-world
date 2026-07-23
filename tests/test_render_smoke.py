@@ -4,7 +4,7 @@ import numpy as np
 import pygame
 from snake_rl.config import CFG
 from snake_rl.worldgen import generate_world
-from snake_rl.render import Renderer, RAY_KIND, color_for
+from snake_rl.render import Renderer, RAY_KIND, color_for, ZOOM_MAX
 from snake_rl.world import wrap
 
 
@@ -111,6 +111,24 @@ def test_render_draws_arriving_chicken_through_the_whole_drop():
         r.draw(w)                              # must not raise at any height
     r.spawn_land(np.array([60.0, 60.0]))       # landing puff particles
     r.draw(w)
+    r.close()
+
+
+def test_render_camera_offset_zoom_and_zero_live_snakes():
+    # Phase B increment 1: draw through the camera transform (offset + zoom), including a 0-live-snakes
+    # all-eggs world, must not crash; cam_center maps to the canvas center; zoom clamps to [1, ZOOM_MAX].
+    w = generate_world(CFG, seed=2, size=(120.0, 90.0), n_snakes=3, arrivals=True, ego_live=False)
+    assert sum(1 for s in w.snakes if s.alive) == 0            # all-eggs start: no live snake to follow
+    r = Renderer(scale=5)
+    r.draw(w, cam_center=(30.0, 40.0), zoom=3.0)              # free/follow: offset + zoom, 0 live
+    cx, cy = r._world_to_canvas((30.0, 40.0))                 # camera center lands at canvas center
+    assert abs(cx - r.cw / 2) < 1e-6 and abs(cy - r.ch / 2) < 1e-6
+    r.draw(w)                                                  # default (overview fit-to-screen)
+    r.draw(w, zoom=999.0)
+    assert r.zoom == ZOOM_MAX                                  # clamped
+    # a live multi-snake world zoomed in near a snake's head must also render cleanly
+    w2 = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=3)
+    r.draw(w2, cam_center=tuple(w2.snakes[0].head_uw), zoom=4.0, follow_id=w2.snakes[0].id)
     r.close()
 
 

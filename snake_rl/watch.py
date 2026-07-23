@@ -6,7 +6,7 @@ import pygame
 from stable_baselines3 import PPO
 from .config import CFG
 from .train import build_vec
-from .render import Renderer
+from .render import Renderer, ZOOM_MIN, ZOOM_MAX
 from .world import wrap, torus_delta
 from .worldgen import generate_world
 from .selfplay import OpponentController
@@ -270,6 +270,68 @@ def _screen_fit_world_size(short=86.4):
     return (short, short * sh / sw), (sw, sh)
 
 
+# --- viewer camera (free-pan + follow, Phase B increment 1) ---
+CAM_FOLLOW_ZOOM = 3.0       # default zoom when following a snake (overview forces zoom 1)
+PAN_UNITS_PER_SEC = 45.0    # free-pan speed at zoom 1 (scaled by 1/zoom so panning feels constant)
+DEATH_LINGER_S = 3.0        # hold the camera at a followed snake's death spot this long, then advance
+
+
+def _live_ids(world):
+    return sorted(s.id for s in world.snakes if s.alive)
+
+
+def _head_of(world, sid):
+    return next((s.head_uw for s in world.snakes if s.id == sid and s.alive), None)
+
+
+def _new_camera(world):
+    return {"mode": "follow", "zoom": CAM_FOLLOW_ZOOM,
+            "pan": np.asarray(world.size, float) / 2.0,
+            "follow_id": next((s.id for s in world.snakes if s.alive), None),
+            "last_head": None, "death_t": None}
+
+
+def _cycle_follow(cam, world, delta):
+    """`[` / `]`: switch the followed snake to the prev/next live one (stable order by id)."""
+    ids = _live_ids(world)
+    if not ids:
+        return
+    cam["mode"] = "follow"
+    i = (ids.index(cam["follow_id"]) + delta) % len(ids) if cam["follow_id"] in ids else \
+        (0 if delta >= 0 else len(ids) - 1)
+    cam["follow_id"] = ids[i]
+    cam["death_t"] = None
+
+
+def _camera_view(cam, world, bodies, now):
+    """Resolve (cam_center_world, draw_zoom) for this frame and advance follow/linger state.
+    FREE: pan-driven center at the current zoom. FOLLOW: tracks the followed snake's interpolated
+    head; on its death, holds at the death spot for DEATH_LINGER_S then advances to the next live
+    snake (overview -- whole world at zoom 1 -- when nobody is left)."""
+    if cam["mode"] == "free":
+        return cam["pan"], cam["zoom"]
+    ids = _live_ids(world)
+    fid = cam["follow_id"]
+
+    def head_center(sid):
+        h = bodies[sid][0] if sid in bodies else _head_of(world, sid)
+        cam["last_head"] = np.asarray(wrap(h, world.size), float) if h is not None else cam["last_head"]
+        return cam["last_head"]
+
+    if fid in ids:
+        cam["death_t"] = None
+        return head_center(fid), cam["zoom"]
+    if fid is not None and cam["death_t"] is None:
+        cam["death_t"] = now                                  # followed snake just died -> start linger
+    if cam["death_t"] is not None and now - cam["death_t"] < DEATH_LINGER_S and cam["last_head"] is not None:
+        return cam["last_head"], cam["zoom"]                  # hold at the death spot
+    cam["follow_id"] = ids[0] if ids else None                # linger over -> advance to next live snake
+    cam["death_t"] = None
+    if cam["follow_id"] is not None:
+        return head_center(cam["follow_id"]), cam["zoom"]
+    return np.asarray(world.size, float) / 2.0, 1.0           # nobody alive -> whole-world overview
+
+
 def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fullscreen=True):
     """Persistent-world viewer [I-7]: a plain World is stepped directly (no SB3 VecEnv, no
     autoreset) with EVERY snake -- including the nominal ego slot -- driven by one
@@ -290,7 +352,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
     clock = pygame.time.Clock()
     paused = False
     running = True
-    follow_id = next((s.id for s in world.snakes if s.alive), None)   # None => overview (all-eggs start)
+    cam = _new_camera(world)   # free-pan/follow camera (arrows pan, [/] cycle, Tab toggle, wheel/+/- zoom)
 
     def snapshot(w):
         return _snake_snap(w), _chicken_snap(w)
@@ -303,6 +365,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
             for e in pygame.event.get():
                 if e.type == pygame.QUIT:
                     running = False
+                elif e.type == pygame.MOUSEWHEEL:
+                    cam["zoom"] = float(np.clip(cam["zoom"] * (1.12 ** e.y), ZOOM_MIN, ZOOM_MAX))
                 elif e.type == pygame.KEYDOWN:
                     if e.key == pygame.K_ESCAPE:
                         running = False
@@ -312,9 +376,23 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         renderer.toggle_sensors()
                     elif e.key == pygame.K_h:
                         renderer.toggle_rings()
-                    elif e.key in (pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS):
+                    elif e.key == pygame.K_TAB:               # free <-> follow
+                        if cam["mode"] == "follow":
+                            seed_c = cam["last_head"] if cam["last_head"] is not None else world.size / 2
+                            cam["pan"] = np.asarray(seed_c, float).copy(); cam["mode"] = "free"
+                        else:
+                            cam["mode"] = "follow"; cam["death_t"] = None
+                    elif e.key == pygame.K_LEFTBRACKET:
+                        _cycle_follow(cam, world, -1)
+                    elif e.key == pygame.K_RIGHTBRACKET:
+                        _cycle_follow(cam, world, +1)
+                    elif e.key in (pygame.K_EQUALS, pygame.K_PLUS):
+                        cam["zoom"] = float(np.clip(cam["zoom"] * 1.25, ZOOM_MIN, ZOOM_MAX))
+                    elif e.key == pygame.K_MINUS:
+                        cam["zoom"] = float(np.clip(cam["zoom"] / 1.25, ZOOM_MIN, ZOOM_MAX))
+                    elif e.key == pygame.K_PERIOD:            # sim speed (rebound off the arrows)
                         sim_hz = min(60, sim_hz + 2)
-                    elif e.key in (pygame.K_DOWN, pygame.K_MINUS):
+                    elif e.key == pygame.K_COMMA:
                         sim_hz = max(2, sim_hz - 2)
                     elif e.key == pygame.K_n:                 # fresh persistent world (not an autoreset)
                         seed += 1
@@ -323,8 +401,15 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                                                    CFG.n_start_min, CFG.n_start_max + 1)),
                                                arrivals=True, ego_live=False)
                         controller.reset_all()
-                        follow_id = next((s.id for s in world.snakes if s.alive), None)
+                        cam = _new_camera(world)
                         prev_bodies, prev_ch = cur_bodies, cur_ch = snapshot(world); since = 0.0
+            if cam["mode"] == "free":                          # arrow-key pan (held keys, smooth)
+                keys = pygame.key.get_pressed()
+                dx = keys[pygame.K_RIGHT] - keys[pygame.K_LEFT]
+                dy = keys[pygame.K_DOWN] - keys[pygame.K_UP]
+                if dx or dy:
+                    step = PAN_UNITS_PER_SEC * frame_dt / cam["zoom"]
+                    cam["pan"] = wrap(cam["pan"] + np.array([dx, dy], float) * step, world.size)
             interval = 1.0 / sim_hz
             if not paused:
                 since += frame_dt
@@ -333,14 +418,13 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                     before = _gore_state(world)
                     _step_world(world, controller)
                     _emit_gore(renderer, before, world)                   # blood/gore on eat/death/hatch
-                    alive_ids = {s.id for s in world.snakes if s.alive}
-                    if follow_id not in alive_ids:            # camera re-targets on death, else overview
-                        follow_id = next(iter(alive_ids), None)   # None => overview when nobody's alive
                     prev_bodies, prev_ch = cur_bodies, cur_ch
                     cur_bodies, cur_ch = snapshot(world)
             f = 0.0 if paused else min(1.0, since / interval)
             bodies = _interp_bodies(prev_bodies, cur_bodies, f)
             cpos, cdir = _interp_chickens(prev_ch, cur_ch, f, world.size)
-            renderer.draw(world, bodies, cpos, cdir, follow_id=follow_id)
+            cam_center, draw_zoom = _camera_view(cam, world, bodies, pygame.time.get_ticks() / 1000.0)
+            renderer.draw(world, bodies, cpos, cdir, follow_id=cam["follow_id"],
+                          cam_center=cam_center, zoom=draw_zoom)
     finally:
         renderer.close()

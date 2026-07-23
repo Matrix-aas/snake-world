@@ -4,7 +4,7 @@ import numpy as np
 from snake_rl.config import CFG
 from snake_rl.train import train
 from snake_rl.watch import (rollout_once, run_headless, _step_world, _reseed_floor, _load_model,
-                            _new_ecosystem)
+                            _new_ecosystem, _new_camera, _cycle_follow, _camera_view, DEATH_LINGER_S)
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
 from stable_baselines3 import PPO
@@ -91,6 +91,39 @@ def test_step_world_advances_each_ring_once_in_no_ego_world(tmp_path):
     ring = ctrl.rings[first.id]
     populated = sum(bool(np.any(row)) for row in ring)
     assert populated == 1                                       # a double-roll would populate 2 frames
+
+
+def _bodies(w):
+    return {s.id: w._body_render_path_uw(s) for s in w.snakes if s.alive}
+
+
+def test_camera_follow_cycle_and_death_linger():
+    # Phase B increment 1: follow tracks a snake; [/] cycle stable-by-id; a followed snake's death
+    # holds the camera at its death spot for DEATH_LINGER_S, then advances to the next live snake.
+    w = generate_world(CFG, seed=7, size=(140.0, 140.0), n_snakes=3)      # 3 live snakes
+    ids = sorted(s.id for s in w.snakes if s.alive)
+    cam = _new_camera(w)
+    assert cam["follow_id"] == ids[0] and cam["mode"] == "follow"
+    _, z = _camera_view(cam, w, _bodies(w), now=1.0)
+    assert z == cam["zoom"]
+    _cycle_follow(cam, w, +1); assert cam["follow_id"] == ids[1]          # next
+    _cycle_follow(cam, w, -1); assert cam["follow_id"] == ids[0]          # prev (wraps)
+    _camera_view(cam, w, _bodies(w), now=10.0)                            # record last_head while alive
+    last = cam["last_head"].copy()
+    next(s for s in w.snakes if s.id == cam["follow_id"]).alive = False   # kill the followed snake
+    c1, _ = _camera_view(cam, w, _bodies(w), now=10.2)                    # within linger -> hold
+    assert np.allclose(c1, last) and cam["follow_id"] == ids[0]
+    _camera_view(cam, w, _bodies(w), now=100.0)                           # linger elapsed -> advance
+    assert cam["follow_id"] in (ids[1], ids[2])
+
+
+def test_camera_overview_when_no_live_snakes():
+    # All-eggs viewer world (0 live): follow has no target -> whole-world overview at zoom 1, centered.
+    w = generate_world(CFG, seed=2, size=(120.0, 120.0), n_snakes=3, arrivals=True, ego_live=False)
+    cam = _new_camera(w)
+    assert cam["follow_id"] is None
+    center, z = _camera_view(cam, w, {}, now=0.0)
+    assert z == 1.0 and np.allclose(center, np.asarray(w.size, float) / 2)
 
 
 def test_load_model_rejects_dim_mismatched_model(tmp_path):

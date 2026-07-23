@@ -20,6 +20,7 @@ from .world import wrap
 
 SS = 2                   # supersample factor (draw big, smoothscale down for anti-aliasing)
 TARGET_PX = 860          # display fits ~this many pixels on its long side
+ZOOM_MIN, ZOOM_MAX = 1.0, 6.0     # camera zoom clamp (1 = whole world fits; >1 zooms in)
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 ASSET_FILES = {
     "ground": "ground.png",                                     # single-tile fallback (see _build_ground)
@@ -109,6 +110,11 @@ class Renderer:
         self.canvas = self.display = None
         self.cw = self.ch = self.dw = self.dh = 0
         self._scale = 1
+        self._base_scale = 1       # world->canvas px at zoom 1 (fit-to-screen); _scale = base * zoom
+        self.zoom = 1.0
+        self._camc = None          # camera center in world units (None -> world center, set each draw)
+        self._wsize = None
+        self._perx = self._pery = 0  # torus period in canvas px (world.size * _scale)
         self._ss = SS
         self._world_key = None
         self._t = 0                # render-frame counter (particle seeds, tongue flick)
@@ -192,31 +198,45 @@ class Renderer:
         self.dw, self.dh = dw, dh
         self._ss = 2 if max(dw, dh) <= 1100 else 1    # supersample small windows; native res is crisp enough
         self.cw, self.ch = dw * self._ss, dh * self._ss
-        self._scale = self.cw / world.size[0]         # world units -> canvas px
+        self._base_scale = self.cw / world.size[0]    # world units -> canvas px at zoom 1
+        self._scale = self._base_scale                # draw() re-derives this as base * zoom each frame
         self.canvas = pygame.Surface((self.cw, self.ch)).convert()
         self._sprite_cache = {}                       # fresh sprites for the new surface format (Pitfall 11)
         self._load_assets()
         self._ground_surf = self._build_ground()
         self._motes = self._make_motes(world)
 
+    def _world_to_canvas(self, p):
+        """World point -> canvas px through the camera: nearest-image of `p` relative to the camera
+        center (torus), scaled by _scale (base * zoom), centered on the canvas. With the default
+        camera (center of world, zoom 1) this is exactly the old `p * _scale` fit-to-screen map."""
+        w = self._wsize
+        c = self._camc if self._camc is not None else (w / 2 if w is not None else np.zeros(2))
+        d0 = ((float(p[0]) - c[0] + w[0] / 2) % w[0]) - w[0] / 2
+        d1 = ((float(p[1]) - c[1] + w[1] / 2) % w[1]) - w[1] / 2
+        return (self.cw * 0.5 + d0 * self._scale, self.ch * 0.5 + d1 * self._scale)
+
     def _p(self, xy):
-        return (int(xy[0] * self._scale), int(xy[1] * self._scale))
+        x, y = self._world_to_canvas(xy)
+        return (int(x), int(y))
 
     # --- torus-aware primitives ---
     def _circle(self, color, pos, r):
-        bx, by = int(pos[0] * self._scale), int(pos[1] * self._scale)
-        for ox in (0, -self.cw, self.cw):
-            for oy in (0, -self.ch, self.ch):
-                if -r <= bx + ox <= self.cw + r and -r <= by + oy <= self.ch + r:
-                    pygame.draw.circle(self.canvas, color, (bx + ox, by + oy), r)
+        bx, by = self._world_to_canvas(pos)
+        for ox in (0, -self._perx, self._perx):
+            for oy in (0, -self._pery, self._pery):
+                x, y = bx + ox, by + oy
+                if -r <= x <= self.cw + r and -r <= y <= self.ch + r:
+                    pygame.draw.circle(self.canvas, color, (int(x), int(y)), r)
 
     def _blit_world(self, surf, pos, off=(0, 0)):
         """Blit a surface centered at a world position, repeated across the torus seams."""
         w, h = surf.get_size()
-        bx = pos[0] * self._scale - w / 2 + off[0]
-        by = pos[1] * self._scale - h / 2 + off[1]
-        for ox in (0, -self.cw, self.cw):
-            for oy in (0, -self.ch, self.ch):
+        cx, cy = self._world_to_canvas(pos)
+        bx = cx - w / 2 + off[0]
+        by = cy - h / 2 + off[1]
+        for ox in (0, -self._perx, self._perx):
+            for oy in (0, -self._pery, self._pery):
                 x, y = bx + ox, by + oy
                 if -w < x < self.cw and -h < y < self.ch:
                     self.canvas.blit(surf, (int(x), int(y)))
@@ -710,15 +730,24 @@ class Renderer:
             if kd != -1:
                 pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
 
-    def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None):
+    def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None,
+             cam_center=None, zoom=1.0):
         """Composite the scene in depth order: ground -> obstacles -> blood decals -> corpses ->
         eggs -> chickens -> sky-dropping chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
         `bodies`: optional {snake_id: interpolated unwrapped body polyline}. `follow_id`: which
-        snake gets the larger ring HUD + sensor overlay (defaults to slot-0)."""
+        snake gets the larger ring HUD + sensor overlay (defaults to slot-0). `cam_center` (world
+        units, None -> world center) + `zoom` (>=1 zooms in) drive the camera transform; the default
+        reproduces the old whole-world fit-to-screen."""
         self._t += 1
         self._clock = self._clock_override if self._clock_override is not None \
             else pygame.time.get_ticks() / 1000.0     # wall-clock anim time (smooth, sim-independent)
         self._ensure(world)
+        self._wsize = np.asarray(world.size, float)
+        self.zoom = float(np.clip(zoom, ZOOM_MIN, ZOOM_MAX))
+        self._scale = self._base_scale * self.zoom
+        self._camc = np.asarray(cam_center, float) if cam_center is not None else self._wsize / 2
+        self._perx = float(world.size[0]) * self._scale
+        self._pery = float(world.size[1]) * self._scale
         if chick_pos is None:
             chick_pos, chick_dir = world.chicken_pos, world.chicken_dir
         self.canvas.blit(self._ground_surf, (0, 0))
