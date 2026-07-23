@@ -60,11 +60,11 @@ range. **The brain senses its own genome** (all 9 floats in proprioception).
 | 7 | `kin_care` | tolerance/cooperation toward kin (behavioral) | helping relatives spreads shared genes (kin selection) — needs relatedness sensor |
 | 8 | `boldness` | risk tolerance near obstacles/rivals/prey (behavioral) | more dashing/committing vs. caution (stun cost, cut-off exposure) |
 
-Concrete initial interpolation ranges (in `Config`, tuned during retrain — **must keep
-`assert_invariants` valid at BOTH extremes**, see §2.4):
+Concrete initial interpolation ranges (in `Config`; the HARD gates in §2.4 cap them, the rest is
+tuned during retrain):
 
-- `size`: `length_cap × [0.65, 1.35]`; `turn_deg × [0.85, 1.25]` (bigger = coarser turns);
-  `energy_decay` gets a size surcharge (bigger body costs more).
+- `size`: `length_cap × [0.65, 1.35]`; `turn_deg × [0.85, 1.15]` (bigger = coarser turns; **1.15 cap
+  set by the precision gate, §2.4**); `energy_decay` gets a size surcharge (bigger body costs more).
 - `metabolism`: `energy_decay × [0.65, 1.5]`.
 - `speed`: `v_snake` & `v_dash × [0.85, 1.2]`.
 - `stamina`: `s_max × [0.7, 1.4]`, `stamina_regen × [0.7, 1.4]`.
@@ -75,6 +75,13 @@ Concrete initial interpolation ranges (in `Config`, tuned during retrain — **m
 Behavioral genes (6–8) have **no direct physics**; they enter the world only as observation the
 brain conditions on. They evolve because the brain's genome-conditioned policy makes them pay off
 differently in different population states.
+
+> **Pitfall-12-clean by construction.** The brain observes the **gene** (always ∈[0,1]), not the
+> derived stat. Domain randomization sweeps the whole [0,1] box during training, so **retuning any
+> interpolation range post-training never shifts the observed distribution** — it only changes
+> physics. This makes the genome immune to the Pitfall-12 trap that `repro_length_min` had to be
+> argued into. (Corollary: the *derived stats* used as normalization denominators are the thing to
+> watch — see §7.)
 
 ### 2.2 Inheritance
 
@@ -101,22 +108,39 @@ proxy** (phenotype/greenbeard matching), *not* pedigree. Lazy and biologically d
 ancestry-coefficient tracking is a future upgrade if the proxy proves too noisy. Sensed in the
 social channel (§7).
 
-### 2.4 Invariants across the gene box
+### 2.4 Invariants across the gene box (revised — hard vs. soft)
 
-`assert_invariants(cfg)` currently checks a single point. It must now hold across the **whole gene
-range**. Add an `assert_invariants_over_genome(cfg)` that evaluates the feasibility invariants at the
-gene extremes that stress them:
+The base `Config` still satisfies **all** of `assert_invariants` unchanged (the interpolation
+endpoints are sane). But requiring **every** joint genome to satisfy **every** invariant boxes the
+genes so tightly that snakes end up cosmetically similar — defeating the headline goal. Two of the
+invariants are **single-strategy-era relics** and must be **downgraded to soft warnings** for the
+per-genome gate:
 
-- Catch precision (`turn_deg/2 < atan(eat_radius/r_flee)`): check at **max size** (coarsest turn) and
-  **min speed**.
-- Self-collision reachable / turn-circumference: check at min & max size/speed.
-- Nearest-image raycast (`ray_range + obstacle_radius_max + head_radius < world_size_min/2`): check
-  at **max `senses`** (longest `ray_range`).
-- Stamina budget closes flee radius (`(s_max/drain)(v_dash−v_flee) ≥ k·r_flee`): check at **min
-  stamina** and **min speed**.
+- **Invariant 4 (self-collision reachable / turn-circumference)** existed only because own-body was
+  *lethal* in the single-snake era. Own body is now **non-lethal solid-slide** (Pitfall 19), so a
+  genome that physically can't curl onto itself is fine — the self-solid simply never engages. **→
+  soft.**
+- **Invariant 2 (a full dash guarantees closing a fleeing chicken)** guaranteed *one* hunting
+  strategy for *one* snake type. With peck-distraction (Pitfall 10) hunting a *pecking* hen needs no
+  dash at all, so a slow/low-stamina genome that can't run down a sprinting hen is a **valid niche**
+  (ambush pecking hens, scavenge corpses/eggs), not a broken snake. **→ soft.**
 
-If an extreme violates an invariant, the corresponding gene range is narrowed. This gate is what
-keeps every genome *playable*.
+Add `assert_invariants_over_genome(cfg)` that keeps only the **true correctness gates HARD** across
+the box, and logs the soft ones:
+
+- **HARD — Catch precision** (`turn_deg/2 < atan(eat_radius/r_flee)`): the brain must be *able* to
+  aim. Stresses at **max size** (coarsest turn). Limit: `turn_deg < 18.92°` at base `r_flee=12`,
+  `eat_radius=2` → **caps `size`'s `turn_deg` multiplier at ≤ 1.15** (16×1.15 = 18.4° < 18.92°).
+- **HARD — Nearest-image raycast** (`ray_range + obstacle_radius_max + head_radius < world_size_min/2`):
+  correctness of the torus raycast. Stresses at **max `senses`** (longest `ray_range`). With the
+  enlarged world (`world_size_min ≥ 180`) and `ray_range ≤ 26`, comfortably satisfied.
+- **SOFT (log, don't fail)** — Invariants 2 and 4 evaluated at their worst joint corners, reported so
+  we *know* which genomes are ambush-only vs. dash-capable, but never blocking.
+
+So the practical constraints on the §2.1 ranges are just the two HARD gates; `size`'s turn multiplier
+is narrowed to `[0.85, 1.15]` accordingly. This gate keeps every genome *aimable and correctly
+sensed*, while allowing the strategic diversity (fast dash-hunters vs. slow ambush-scavengers) the
+whole redesign exists to produce.
 
 ---
 
@@ -131,6 +155,22 @@ smell reach, `max_lifespan`. Implement as a small resolved-stats accessor derive
 route the physics/sensing sites through it; each gene is a scalar interpolation over an existing
 quantity, so no new physics *equations*, only per-snake *values*. Keep the global `CFG` values as
 the interpolation endpoints / defaults.
+
+**Concrete `CFG.`-read sites that must become per-snake** (enumerate in the plan; the accessor step
+gets its own review):
+- `_move_snake` motion: `turn_deg`, cruise `v_snake`, `v_dash`, stun; stamina regen/drain, `s_max`.
+- **Pitfall-5 pair (both must use the SAME per-snake `v_dash`, or a fast snake false-collides with
+  its own neck):** the neck-skip `skip = head_radius + body_radius + v_dash + segment_spacing`
+  (`world.py:269`, `_body_points_uw`) AND the prune slack `target_length + v_dash` (`world.py:231`,
+  `_prune_path`). `skip − v_dash` is invariant, so this is self-consistent for any `v_dash` **iff
+  the same value feeds both**.
+- Energy: `energy_decay` (+ size surcharge) in the per-step hunger; growth per chicken.
+- Sensing: `ray_range` (per-snake `ray_dirs` uses global `fov_deg`/`n_rays` — those stay global,
+  only range scales) and smell reach/strength in `sensors.smell` / `_smell_field`.
+- Lifespan → `max_lifespan` at birth (§5).
+- **Return channel for the egg-lost penalty:** `_snake_eat` currently returns only a count
+  (`world.py:530`); it must also surface the **owner-sets of eaten eggs** (analogous to
+  `hatched_owners`) so `world.step` can hand `env` the penalty targets (§6).
 
 ---
 
@@ -179,9 +219,18 @@ Replaces "egg pops in at the midpoint." ~70% reframe + visuals of existing machi
    construction. `repro_ready` is observed (Pitfall 12), so `sensors._repro_ready` reads this
    per-snake fraction; the value stays in [0,1] and the mating curriculum sweeps the *fraction*
    endpoints instead of an absolute length.
-3. **Lay** — on courtship completion, the **female** lays **one** egg **adjacent to herself**
-   (`_free_point` near her head), carrying `child = crossover+mutation` (§2.2) and `owner = [femaleId,
-   maleId]`. Both parents pay `repro_cost` energy and enter `repro_cooldown`.
+3. **Lay** — on courtship completion, the **female** lays **one** egg **adjacent to herself** — a
+   small fixed offset behind her head (collision-safe), **NOT `_free_point`**: `_free_point`
+   (`world.py:553`) is a *global* spawner that explicitly rejects points *near* snakes (it keeps the
+   ego's start area clear), so it would drop the egg *far* from the female and defeat guarding. The
+   existing parents-midpoint placement (`world.py:656`) already sits within `r_mate/2` and is
+   collision-safe — keep that, or a small offset from her head. The egg carries `child =
+   crossover+mutation` (§2.2), `owner = [femaleId, maleId]`, and a **lineage id = the female's**
+   (maternal inheritance, simple and stable for the family-color, §10). Both parents pay `repro_cost`
+   energy and enter `repro_cooldown`. **Egg arrays now thread `genome (N×9)` + `lineage` in lockstep
+   with `pos/timer/owner` through every `keep=~eaten`/`keep=~hatched` filter** (`world.py:519-522,634`)
+   — name this lockstep surface in the plan (Pitfall-17-style: one wrong filter desyncs a genome from
+   its egg).
 4. **Incubate / guard** — egg lies `egg_timer` steps. **Eatable by any non-owner** (`egg_food`).
    Owners cannot eat their own egg (existing gate) and do not trample it (eggs aren't destroyed by
    contact). Reward to owners comes **only at hatch** (existing) → guarding emerges. (Visual: egg
@@ -189,12 +238,17 @@ Replaces "egg pops in at the midpoint." ~70% reframe + visuals of existing machi
 5. **Hatch** — egg → fresh `Snake`, **random sex**, inherited genome, `hatch_energy_frac` energy,
    fresh `max_lifespan` (own jitter). Pays `reward_repro` to surviving owners.
 
-**Egg-lost penalty (new, small, tunable).** When an egg is **eaten** (not when it hatches, not when
-population-cap-dropped), each surviving owner receives `reward_egg_lost` (small negative, e.g.
-`−4.0`, strictly `< reward_repro` so breeding stays net-positive; defaults tunable and can be zeroed
-like `dash_penalty`). Sharpens guarding pressure and makes "bad parents" a visible selection signal.
-In training only the gradient-ego's copy affects gradients; applied to the ego iff it co-owns the
-eaten egg.
+**Egg-lost penalty (new, small, tunable — but DEFAULT OFF for the discovery retrain).** When an egg
+is **eaten** (not at hatch, not on population-cap-drop — a cap-dropped egg pays neither reward nor
+penalty), each surviving owner receives `reward_egg_lost` (negative, strictly `< reward_repro` so
+breeding stays net-positive; applied to the ego iff it co-owns the eaten egg). **Because reproduction
+is already the hardest thing to bootstrap (Pitfalls 9–11 = multiple aborted runs), attaching a
+downside to *laying* before guarding is learned can suppress laying the way `dash_penalty` suppressed
+dashing (Pitfall 1's cousin). So `reward_egg_lost` DEFAULTS to `0.0` for the from-scratch retrain**
+(mirroring `dash_penalty = 0.0`, `config.py:126`); it is enabled only as a **post-competence
+sharpening knob** (e.g. `−4.0`) once guarding behavior exists, and re-evaluated (a short resume or
+just viewer-runtime, since it doesn't change the observation). Requires the eaten-egg owner-set
+return channel from `world.step` (§3).
 
 Guaranteed **arrival eggs** (owner `[-1,-1]`, world start + viewer reseed, §9) keep their existing
 special-casing: uneatable, `n_max`-cap-exempt, not a "birth", pay no reward. Their carried genome is
@@ -209,7 +263,7 @@ lifespan-derived) are stacked redundantly — harmless, keeps the pipeline simpl
 
 | Block | Was | Now | New content |
 |-------|-----|-----|-------------|
-| **Vision** | 11 rays × 8 | 11 rays × **9** | + per-ray **target motion/activity** (nearest hit's normalized speed): pecking hen ≈0, walking ≈low, fleeing ≈high, dashing snake ≈high — one scalar encodes the "walks/flees/pecks" state the eyes should report |
+| **Vision** | 11 rays × 8 | 11 rays × **9** | + per-ray **target motion/activity** = the hit's **state-nominal** speed (NOT raw instantaneous): pecking hen → 0, walking → low, **fleeing/startling → high**, dashing snake → high. State-nominal (not instantaneous) is deliberate — a hen in its startle-*freeze* (speed 0, about to bolt) must read "flee," not collide with a pecking hen's 0. One scalar then cleanly encodes walk/flee/peck. |
 | **Social** | 7 | **11** | existing 7 + `relatedness` + rival `energy` (weakness cue) + rival `repro_ready` + rival `sex` |
 | **Egg** | 4 | 4 | unchanged |
 | **Smell** | 9 | 9 | unchanged (chicken/snake/corpse); *reach* now per-snake (`senses` gene) |
@@ -221,7 +275,27 @@ and hand-enumerate the observation-space bounds in `env._make_observation_space`
 current layout discipline. `frame_stack=4` → policy input ≈ 572.
 
 **Vibration field** is a smell-like field over live rivals + fleeing chickens weighted by their
-speed; bounded (n_max + chicken_ceiling caps) and clipped for `observation_space.contains`.
+speed, **un-occluded** (its one genuinely-new signal over the occluded smell field is "feel a dasher
+behind a rock / beyond the vision cone"). Its ±bound is enumerated at `n_max + chicken_ceiling`
+(= 12 + 12 = 24) and clipped for `observation_space.contains`. **It is the most cuttable new sensor**
+(rivals are already in the smell-snake field, their visible speed in per-ray motion, the nearest
+rival's dash in social `is_dashing`) — kept in v1 per the user's "all sensors in", but it is the
+**first thing to drop** if the whole-box bootstrap (§11) struggles, since fewer obs dims = less
+bootstrap burden.
+
+**Bounds & normalization discipline (Pitfall-12 corollary — the derived stats bite, not the genes):**
+several current normalizers are global `CFG` and break or lose granularity once stats are per-snake —
+name each in the plan:
+- **`smell()` chicken/snake intensity is NOT clipped** (`sensors.py:161-173`; only corpse is). A
+  per-snake smell reach ×1.4 pushes intensity to `1.4×chicken_ceiling` → `observation_space.contains`
+  fails → `check_env` fails for high-`senses` genomes. **Fix:** clip chicken/snake intensity to
+  `chicken_ceiling` like corpse already is (or widen the smell bound by the max reach multiplier).
+- **Per-ray motion** normalized by global `v_dash`: a rival dashing at `v_dash×1.2` reads 1.2 → clip
+  to 1, or normalize by the **observer-independent global max** `v_dash × max_speed_gene`.
+- **Proprio `speed`/`stamina`/`length`** are already `np.clip`'d (`sensors.py:228-231`) so bounds
+  hold, but a high-`stamina`/`size` genome **saturates at 1.0 well below its own reserve/length**,
+  losing the granularity the brain needs to time dashes. **Prefer per-snake denominators**
+  (`stamina / own_s_max`, `length / own_max_length`) so the signal spans [0,1] for every genome.
 
 **Stun sensor:** `Snake.stun` (already a countdown field) normalized into proprio, so the brain can
 credit "dash into solid → stun → wasted time" and learn to avoid it (Pitfall 19's opportunity cost
@@ -232,10 +306,23 @@ becomes directly observable).
 ## 8. No ego / spawn-only-from-eggs
 
 - **Viewer & world semantics:** there is **no special snake**. `worldgen` for the viewer starts
-  with **only arrival eggs** — no live snake at all at t=0. Snakes exist only by hatching. The
-  legacy slot-0 "ego" concept is removed from the viewer path (`watch` already drives every snake
-  through one controller; we drop the "ego is always live" assumption and the nominal slot-0
-  special-casing).
+  with **only arrival eggs** — no live snake at all at t=0. Snakes exist only by hatching. **This is
+  a cross-cutting refactor of the `snakes[0]`-is-the-ego assumption, not a one-line drop — it gets
+  its own Phase-A step with its own review.** Concrete sites that hard-assume a live slot-0 ego and
+  must tolerate *zero live snakes*:
+  - `world.step` (`world.py:727-729`): `ego = self.snakes[0]; not ego.alive; ego_dashed` →
+    `IndexError` on an empty list. `step` is shared with training (which *needs* the ego return), so
+    it **bifurcates**: return `died=None`/no-ego info when there is no privileged/live ego (viewer),
+    keep the ego return for the training env.
+  - `world._free_point` (`world.py:563,565`) reads `self.head` (→ `snakes[0]` via the `_ego_prop`
+    descriptors) to reject the ego's start area — but it's what worldgen (`worldgen.py:37`) and the
+    reseed floor (`watch.py:91`) call to place the founder eggs, so the all-eggs world can't place
+    its own founders without an ego. **Strip the ego-area rejection** (it only ever protected the
+    ego's spawn; irrelevant for placing eggs).
+  - `watch._step_world` (`watch.py:101-102`), `run_watch` `follow_id = world.snakes[0].id`
+    (`watch.py:286`), `World.__init__`/`_ego_prop` (`world.py:96-101`), `_prune_dead`
+    (`world.py:551`): guard every "slot-0 exists" read for an empty live set (follow falls back to
+    "no target / overview" until an egg hatches).
 - **Training plumbing:** SB3 PPO requires exactly one learner agent with a body every step.
   `env.reset` therefore spawns **one live gradient-source snake** (the rest as eggs). It has **zero
   special powers** — ages, mates, dies, is sensed like any other; it is merely where gradients are
@@ -329,10 +416,22 @@ New/changed tests:
 
 ## 13. Build phasing
 
-- **Phase A (feeds the retrain):** genome + inheritance + relatedness; per-snake physiology
-  accessor + invariant-over-genome gate; sex; aging/death-by-age; reproduction FSM + egg-lost
-  penalty; observation redesign; all-eggs worldgen + no-ego training plumbing; world/population
-  scaling (`n_max=12`, bigger world). All tests for the above.
+- **Phase A (feeds the retrain)** — heavier than one line each; the plan splits these into
+  independently-reviewed steps, roughly in this order:
+  1. **Genome + inheritance + relatedness** (dataclass field, crossover/mutation, relatedness metric).
+  2. **Gene-range resolution + invariant-over-genome gate** (§2.4 — resolve the actual HARD-safe
+     ranges FIRST; downstream physics depends on final ranges).
+  3. **Per-snake physiology accessor** + routing the §3 sites (incl. the Pitfall-5 `v_dash` pair).
+  4. **Sex**; **aging/death-by-age**.
+  5. **Reproduction FSM** (courtship→lay→guard, sex-gated, egg carries genome+lineage; egg-lost
+     penalty plumbed but **defaulted 0** for the retrain).
+  6. **Observation redesign** (all new channels + the §7 bounds/normalization fixes; enumerate exact
+     `OBS_DIM` and env bounds; opponent-obs parity check).
+  7. **No-ego / all-eggs refactor** (its own step — the §8 `snakes[0]` sites); training plumbing
+     keeps one live gradient-ego.
+  8. **World/population scaling** (`n_max=12`, bigger world, `n_max`-keyed caps, food/obstacle
+     density).
+  Every step lands with its tests; steps 3, 6, 7 get their own reviews (highest-risk).
 - **Retrain** (from scratch).
 - **Phase B (no retrain):** camera (free/follow/cycle/3-s-linger, pan+zoom); genome→color/pattern/
   size; genome inspector overlay; stun & courtship & egg-wobble FX.
@@ -351,5 +450,14 @@ obs redesign, reproduction FSM) get reviews too; a final review at the end.
   if the weakest genomes never bootstrap, the average signal may stall. Fallback: start with
   narrower gene ranges, widen after competence.
 - **Obs growth** (113→~143, ×4≈572): larger net input, slightly slower; acceptable.
+- **Bootstrap under randomized genomes is the sharpest risk** (§11): a fresh policy must hunt across
+  the WHOLE gene box from scratch, and reproduction (the hardest thing to bootstrap, Pitfalls 9–11)
+  now also depends on courtship + sex. Mitigations baked in: peck-distraction hunting needs no dash
+  (so weak genomes still catch), `reward_egg_lost` defaults off, and the fallback is to **start with
+  narrower gene ranges and widen after competence**. Watch `eaten_per_window` in the first ~50–100k
+  steps; abort early if flat.
+- **Effort is front-loaded and heavier than a bullet list reads:** the physiology accessor (§3), the
+  no-ego refactor (§8), and the egg-array genome/lineage lockstep (§6) are each real multi-site
+  changes, not one-liners. The phasing (§13) reflects this; don't under-budget Phase A.
 - **CLAUDE.md**: must be updated in the same work (new pitfalls, retrain notes, config table) per the
   project's living-memory rule.
