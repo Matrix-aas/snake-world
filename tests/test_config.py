@@ -72,3 +72,15 @@ def test_scaled_population_invariants():
     assert CFG.chicken_ceiling >= CFG.chickens_per_snake_max * CFG.n_max
     assert_invariants(CFG)
     assert_invariants_over_genome(CFG)
+
+
+def test_repro_curriculum_defaults_ship_hard():
+    # base CFG is the viewer/headless mechanic: full energy gate + opposite-sex requirement
+    assert CFG.mate_require_sex is True
+    assert CFG.repro_energy_frac == 0.7
+
+
+def test_easy_repro_energy_gate_still_affords_repro_cost():
+    c = CFG
+    assert c.repro_cost < c.repro_energy_frac_easy * c.energy_max
+    assert c.repro_cost < c.repro_energy_frac * c.energy_max

@@ -151,6 +151,14 @@ class Config:
                                          # (replaces the old absolute repro_length_min sweep; observed via
                                          # sensors._repro_ready, so both gate sites read the swept frac)
     reward_egg_lost: float = 0.0         # DEFAULT OFF for the discovery retrain (Pitfall-1 cousin)
+    # reproduction-discovery curriculum (repro bootstrap fix): with fast hunger (energy_decay 0.20)
+    # the HARD energy gate (repro_energy_frac 0.7) is rarely reached by a fresh policy, and the
+    # opposite-sex requirement halves opportunities further -- both are always-hard today, so
+    # set_hardness now sweeps them too (mirrors the existing repro_length_frac sweep). Ships hard:
+    # at h=1 the mechanic is unchanged (energy 0.7 + opposite-sex required).
+    repro_energy_frac_easy: float = 0.3  # EASY warmup energy gate; swept -> repro_energy_frac as h 0->1
+    mate_sex_hardness: float = 0.3       # hardness at/above which the opposite-sex requirement turns on
+    mate_require_sex: bool = True        # default hard (viewer/base CFG); curriculum sets this per-h
 
     @property
     def eat_radius(self) -> float:
@@ -192,6 +200,9 @@ def assert_invariants(cfg: Config) -> None:
     assert cfg.r_mate >= 2 * cfg.head_radius, "r_mate too small: mating forces a collision"
     # (8) a snake that just crossed the energy threshold can pay the repro cost and live
     assert cfg.repro_cost < cfg.repro_energy_frac * cfg.energy_max, "repro_cost exceeds the mating gate"
+    # (8b) same, at the EASY curriculum energy gate (the discovery-warmup endpoint the curriculum sweeps from)
+    assert cfg.repro_cost < cfg.repro_energy_frac_easy * cfg.energy_max, \
+        "repro_cost exceeds the EASY-curriculum mating gate"
     # (9) hatchling viable
     assert cfg.hatch_energy_frac * cfg.energy_max > 0 and cfg.start_length >= (
         cfg.head_radius + cfg.body_radius + cfg.v_dash + cfg.segment_spacing), "hatchling not viable"

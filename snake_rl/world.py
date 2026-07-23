@@ -737,7 +737,7 @@ class World:
                          a.target_length > c.repro_length_frac * a.phenotype.max_length and
                          b.target_length > c.repro_length_frac * b.phenotype.max_length and
                          a.repro_cooldown == 0 and b.repro_cooldown == 0 and
-                         a.sex != b.sex)
+                         ((not c.mate_require_sex) or a.sex != b.sex))
                 close = torus_dist(a.head_uw[None], b.head_uw, self.size)[0] <= c.r_mate
                 if ready and close:
                     self._mate_streak[key] = self._mate_streak.get(key, 0) + 1

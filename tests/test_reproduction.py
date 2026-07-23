@@ -84,8 +84,8 @@ def test_parent_cannot_eat_own_egg_but_rival_can():
     assert ego.energy == 10.0 + CFG.egg_food
 
 
-def _ready_pair(seed, sexA, sexB, dist=3.0):
-    w = generate_world(CFG, seed=seed, n_snakes=2, size=(100.0, 100.0))   # >2*(ray_range_max+obst+head) (M4)
+def _ready_pair(seed, sexA, sexB, dist=3.0, cfg=CFG):
+    w = generate_world(cfg, seed=seed, n_snakes=2, size=(100.0, 100.0))   # >2*(ray_range_max+obst+head) (M4)
     a, b = w.snakes[0], w.snakes[1]
     # place them close, well-fed, grown, off cooldown, opposite/same sex per args
     for s, sx in ((a, sexA), (b, sexB)):
@@ -104,6 +104,17 @@ def test_same_sex_pair_never_lays():
     for _ in range(CFG.mate_steps + 3):
         w.step(0, 1, 0, opponent_fn=lambda world, s: (0, 1, 0))
     assert len(w.eggs["pos"]) == n_eggs0, "same-sex pair must not produce an egg"
+
+
+def test_same_sex_pair_lays_when_sex_gate_relaxed_by_curriculum():
+    # repro-discovery curriculum easy end: mate_require_sex=False lets a same-sex pair mate too
+    from dataclasses import replace
+    easy = replace(CFG, mate_require_sex=False)
+    w, a, b = _ready_pair(21, 0, 0, cfg=easy)
+    n_eggs0 = len(w.eggs["pos"])
+    for _ in range(CFG.mate_steps + 3):
+        w.step(0, 1, 0, opponent_fn=lambda world, s: (0, 1, 0))
+    assert len(w.eggs["pos"]) > n_eggs0, "same-sex pair should lay an egg once the sex gate is relaxed"
 
 
 def test_opposite_sex_pair_lays_after_courtship():

@@ -48,6 +48,18 @@ def test_egg_lost_reward_only_for_ego_owned_eggs():
     assert env._egg_lost_reward([]) == 0.0                            # nothing eaten -> nothing
 
 
+def test_set_hardness_sweeps_repro_energy_frac_and_sex_gate():
+    # reproduction-discovery curriculum (repro bootstrap fix): easy end lowers the energy gate and
+    # drops the opposite-sex requirement; hard end matches the shipped mechanic exactly.
+    env = SnakeEnv(seed=0)
+    env.set_hardness(0.0)
+    assert env.cfg.repro_energy_frac == CFG.repro_energy_frac_easy
+    assert env.cfg.mate_require_sex is False
+    env.set_hardness(1.0)
+    assert env.cfg.repro_energy_frac == CFG.repro_energy_frac
+    assert env.cfg.mate_require_sex is True
+
+
 def test_reset_seed_deterministic():
     o1, _ = SnakeEnv(seed=7).reset(seed=7)
     o2, _ = SnakeEnv(seed=7).reset(seed=7)

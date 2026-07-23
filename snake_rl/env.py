@@ -100,6 +100,11 @@ class SnakeEnv(gym.Env):
             r_mate=lerp(b.r_mate_easy, b.r_mate),
             mate_steps=int(round(lerp(b.mate_steps_easy, b.mate_steps))),
             repro_length_frac=lerp(b.repro_length_frac_easy, b.repro_length_frac),
+            # reproduction-discovery curriculum: ease the energy gate + drop the sex requirement
+            # early so a fresh policy can actually find the mate->egg->hatch cycle (repro bootstrap
+            # fix). Both read straight back out of world._resolve_mating / sensors._repro_ready.
+            repro_energy_frac=lerp(b.repro_energy_frac_easy, b.repro_energy_frac),
+            mate_require_sex=(h >= b.mate_sex_hardness),
         )
 
     def _egg_lost_reward(self, eaten):
