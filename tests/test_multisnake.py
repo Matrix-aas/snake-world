@@ -121,7 +121,8 @@ def test_all_snakes_eat_and_decay_and_ego_count():
     # ego count is returned (place a chicken on the ego head)
     ego=w.snakes[0]; w.set_chickens([ego.head])
     assert w.try_eat() == 1
-    e=opp.energy; w.decay_energy(); assert opp.energy == max(0.0, e-CFG.energy_decay)
+    # energy_decay is per-snake now (Task 4: hunger reads phenotype, not the global CFG)
+    e=opp.energy; w.decay_energy(); assert opp.energy == max(0.0, e-opp.phenotype.energy_decay)
 
 
 def test_prune_keeps_ego_removes_dead_opponents():

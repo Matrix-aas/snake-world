@@ -211,24 +211,25 @@ class World:
 
     def _move_snake(self, s, speed_idx, steer, dash):
         c = self.cfg
+        ph = s.phenotype                                  # per-snake motion/stamina/hunger stats
         self._body_gen += 1                              # body geometry about to change -> invalidate cache
         if s.stun > 0:                                   # dizzy from a dash into a solid: frozen (steering too)
             s.stun -= 1
             s.dashed = False
             s.speed = 0.0
-            s.stamina = min(c.s_max, s.stamina + c.stamina_regen)   # stunned == a dead stop -> full (speed-0) regen
+            s.stamina = min(ph.s_max, s.stamina + ph.stamina_regen)   # stunned == a dead stop -> full (speed-0) regen
             s._prev_head_uw = s.head_uw.copy()
             s.path_uw.append(s.head_uw.copy())
             self._prune_path(s)
             s.steps += 1
             return False
         if steer == 0:
-            s.heading -= np.radians(c.turn_deg)
+            s.heading -= np.radians(ph.turn_deg)
         elif steer == 2:
-            s.heading += np.radians(c.turn_deg)
+            s.heading += np.radians(ph.turn_deg)
         s.heading %= 2 * np.pi
-        dashing = bool(dash) and s.stamina >= c.dash_min_stamina  # reserve gate (curriculum-tunable)
-        speed = c.v_dash if dashing else c.speed_levels[speed_idx] * c.v_snake
+        dashing = bool(dash) and s.stamina >= c.dash_min_stamina  # reserve gate (curriculum-tunable, global)
+        speed = ph.v_dash if dashing else c.speed_levels[speed_idx] * ph.v_snake
         s.speed = speed
         prev_uw = s.head_uw.copy()
         disp = speed * s.heading_vec()
@@ -254,7 +255,7 @@ class World:
             # regen scales with the CHOSEN cruise speed: full at a dead stop (speed_idx 0), zero at
             # full cruise (speed_idx 3). Standing still both ambushes AND recharges the dash reserve
             # fastest -> the net must learn to pause to bank stamina (v2.1, resume-trained).
-            s.stamina = min(c.s_max, s.stamina + c.stamina_regen * (1.0 - c.speed_levels[speed_idx]))
+            s.stamina = min(ph.s_max, s.stamina + ph.stamina_regen * (1.0 - c.speed_levels[speed_idx]))
         s.steps += 1
         s._prev_head_uw = prev_uw
         s.dashed = dashing
@@ -267,8 +268,9 @@ class World:
         dp = np.diff(pts, axis=0)
         seg = np.sqrt((dp * dp).sum(1))
         cum = np.cumsum(seg[::-1])[::-1]              # dist from head to each point's forward neighbor
-        # slack = max motion step (v_dash), so body_points_uw never truncates its tail after a dash
-        keep = np.concatenate([cum <= (s.target_length + self.cfg.v_dash), [True]])
+        # slack = this snake's own max motion step (v_dash), so body_points_uw never truncates its tail
+        # after a dash -- MUST match the neck-skip's v_dash below (Pitfall 5: same snake, same value).
+        keep = np.concatenate([cum <= (s.target_length + s.phenotype.v_dash), [True]])
         s.path_uw = [p.copy() for p in pts[keep]]
 
     def _arc_points(self, pts, targets):
@@ -305,8 +307,10 @@ class World:
         # Skip the head-adjacent "neck", then a body point every segment_spacing.
         # The skip must clear the whole swept collision segment [prev_head -> head] (up to v_dash long),
         # not just the head, or a straight snake collides with its own neck. Needs
-        # skip - v_dash > body_radius + head_radius; this leaves a comfortable margin.
-        skip = c.head_radius + c.body_radius + c.v_dash + c.segment_spacing
+        # skip - v_dash > body_radius + head_radius; this leaves a comfortable margin. Uses THIS
+        # snake's own v_dash (Pitfall 5) -- must match _prune_path's slack above, or a fast-genome
+        # snake's prune keeps a shorter tail than its own neck-skip needs, truncating the body early.
+        skip = c.head_radius + c.body_radius + s.phenotype.v_dash + c.segment_spacing
         targets = []
         t = skip
         while t <= s.target_length:                       # kept as-is: bit-identical target arc values
@@ -584,7 +588,7 @@ class World:
     def decay_energy(self):
         for s in self.snakes:
             if s.alive:
-                s.energy = max(0.0, s.energy - self.cfg.energy_decay)
+                s.energy = max(0.0, s.energy - s.phenotype.energy_decay)
 
     def _prune_dead(self):
         """Drop dead non-ego opponents (ego kept in slot 0 even when dead)."""

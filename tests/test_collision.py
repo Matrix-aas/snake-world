@@ -1,6 +1,20 @@
 import numpy as np
 from snake_rl.config import CFG
 from snake_rl.world import World, wrap, torus_dist
+from snake_rl.worldgen import generate_world
+from snake_rl import genome as gm
+
+
+def test_fast_genome_straight_line_no_self_neck_collision():
+    # Pitfall 5: a fast genome moving straight must not false-collide with its own neck.
+    w = generate_world(CFG, seed=11, n_snakes=1)
+    fast = np.zeros(gm.GENE_COUNT, np.float32); fast[gm.SPEED] = 1.0
+    w.snakes[0] = w._make_snake(w.snakes[0].head, 0.0, genome=fast, sex=0, lineage=1,
+                                id=w.snakes[0].id, color_seed=1, energy=CFG.energy_max,
+                                target_length=CFG.length_cap, rng=w.rng)
+    for _ in range(30):
+        w.step(3, 1, 1, opponent_fn=lambda world, s: (3, 1, 1))   # full cruise + dash, straight
+        assert w.snakes[0].alive, "fast straight snake wrongly died (neck-skip not per-snake v_dash)"
 
 
 def test_dash_into_obstacle_stuns_not_dead():
@@ -90,7 +104,9 @@ def test_straight_full_length_advances_without_neck_deflection():
     prev = w.head_uw.copy()
     w.move(3, 1, 0)
     d = w.head_uw - prev
-    assert abs(d[0] - CFG.v_snake) < 1e-6 and abs(d[1]) < 1e-9
+    # v_snake is per-snake now (Task 4); this founder's genome is random (World.__init__), so
+    # compare against its OWN resolved phenotype, not the global CFG.
+    assert abs(d[0] - w.snakes[0].phenotype.v_snake) < 1e-6 and abs(d[1]) < 1e-9
 
 
 def test_curled_onto_own_body_not_dead():
