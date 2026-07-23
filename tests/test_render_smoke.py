@@ -188,6 +188,22 @@ def test_inspector_overlay_renders_for_followed_snake():
     r.close()
 
 
+def test_inspector_fallen_panel_and_ring_hud_size_gene():
+    # Phase B polish #5: during the death-linger the inspector keeps showing the fallen snake (passed
+    # via `fallen=`) instead of blanking; and _ring_hud scales its head radius by the size gene like
+    # _draw_snake, so a big/small snake's badge tracks its actual drawn head. Both must render clean.
+    from snake_rl.genome import SIZE
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
+    dead = w.snakes[0]                                          # a stand-in "fallen" snake object
+    r = Renderer(scale=5, show_inspector=True, show_rings=True)
+    # no live follow target, but a fallen snake is supplied -> panel stays up (tagged fallen)
+    r.draw(w, follow_id=999, inspector_stats={dead.id: {"kills": 1, "offspring": 2}}, fallen=dead)
+    # ring HUD radius follows the size gene (bigger gene -> larger badge)
+    w.snakes[1].genome = w.snakes[1].genome.copy(); w.snakes[1].genome[SIZE] = 1.0
+    r.draw(w, follow_id=w.snakes[1].id)
+    r.close()
+
+
 def test_fx_stun_courtship_and_guarded_egg_render():
     # Phase B increment 4: a stunned snake (dizzy stars), a courting pair (world._mate_streak read
     # read-only -> hearts), a guarded repro egg (owner>=0 glow) and an arrival egg (owner -1, no glow)

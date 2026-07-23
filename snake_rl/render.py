@@ -740,8 +740,9 @@ class Renderer:
         """Per-snake 3-ring badge above the head: outer=energy(green), middle=stamina(cyan),
         inner=length(amber); a thin outline in the snake's hue groups the badge to its owner.
         `head_pos` is the (interpolated) wrapped head the body was drawn at, so it doesn't jitter."""
+        from .genome import SIZE
         c = world.cfg
-        hr = c.head_radius
+        hr = c.head_radius * (0.85 + 0.30 * float(snake.genome[SIZE]))   # match _draw_snake's size-gene scale
         r_out = hr * (2.4 if big else 1.6)
         step = r_out * 0.3
         center = head_pos + np.array([0.0, -(r_out + hr * 1.3)])
@@ -771,10 +772,12 @@ class Renderer:
         pygame.draw.rect(surf, color, (bx, y, int(barw * frac), bh))
         surf.blit(f.render(f"{frac:.2f}", True, (230, 234, 240)), (bx + barw + int(6 * self._ss), y))
 
-    def _draw_inspector(self, world, snake, stats):
+    def _draw_inspector(self, world, snake, stats, fallen=False):
         """Genome inspector overlay for the FOLLOWED snake (toggle key I): a semi-transparent corner
         panel with the family swatch + lineage id, sex, an age/lifespan bar, the 9 gene bars (0..1),
-        and lightweight life stats (kills/offspring, tracked in watch from step's deaths/hatches)."""
+        and lightweight life stats (kills/offspring, tracked in watch from step's deaths/hatches).
+        `fallen`: the followed snake just died -- keep its LAST stats up during the death-linger
+        (tagged) instead of blanking the panel."""
         f = self._panel_font
         s = self._ss
         lh = f.get_height() + int(4 * s)
@@ -791,7 +794,8 @@ class Renderer:
         sw = int(14 * s)
         pygame.draw.rect(panel, fam, (pad, y + int(1 * s), sw, sw))
         sexg = "♀" if int(snake.sex) == 0 else "♂"   # female / male
-        panel.blit(f.render(f"line {int(snake.lineage)}   {sexg}", True, (236, 240, 246)),
+        header = f"line {int(snake.lineage)}   {sexg}" + ("   (fallen)" if fallen else "")
+        panel.blit(f.render(header, True, (228, 150, 150) if fallen else (236, 240, 246)),
                    (pad + sw + int(8 * s), y))
         y += lh
         agefrac = snake.age / max(1.0, float(snake.max_lifespan))
@@ -928,7 +932,7 @@ class Renderer:
                 pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
 
     def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None,
-             cam_center=None, zoom=1.0, inspector_stats=None):
+             cam_center=None, zoom=1.0, inspector_stats=None, fallen=None):
         """Composite the scene in depth order: ground -> obstacles -> blood decals -> corpses ->
         eggs -> chickens -> sky-dropping chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
         `bodies`: optional {snake_id: interpolated unwrapped body polyline}. `follow_id`: which
@@ -979,8 +983,11 @@ class Renderer:
             d = b[0] - b[1] if len(b) > 1 else s.heading_vec()
             nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else s.heading_vec()
             self._draw_sensors(world, b[0], float(np.arctan2(d[1], d[0])), s)
-        if self.show_inspector and follow_snake is not None:
-            self._draw_inspector(world, follow_snake, inspector_stats)
+        if self.show_inspector:
+            if follow_snake is not None:
+                self._draw_inspector(world, follow_snake, inspector_stats)
+            elif fallen is not None:                          # death-linger: keep the fallen snake's panel
+                self._draw_inspector(world, fallen, inspector_stats, fallen=True)
         # Blit into the window via a temp surface (writing straight into the window renders black on
         # some backends). At SS=1 the canvas is already display-sized.
         if self._ss == 1:

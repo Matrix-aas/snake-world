@@ -524,9 +524,9 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
             f = 0.0 if paused else min(1.0, since / interval)
             bodies = _interp_bodies(prev_bodies, cur_bodies, f)
             cpos, cdir = _interp_chickens(prev_ch, cur_ch, f, world.size)
-            cam_center, draw_zoom, _fallen = _camera_view(
+            cam_center, draw_zoom, fallen = _camera_view(
                 cam, world, bodies, renderer, pygame.time.get_ticks() / 1000.0, frame_dt)
             renderer.draw(world, bodies, cpos, cdir, follow_id=cam["follow_id"],
-                          cam_center=cam_center, zoom=draw_zoom, inspector_stats=life_stats)
+                          cam_center=cam_center, zoom=draw_zoom, inspector_stats=life_stats, fallen=fallen)
     finally:
         renderer.close()
