@@ -134,6 +134,27 @@ def test_camera_follow_cycle_adaptive_zoom_ease_and_linger():
     r.close()
 
 
+def test_run_watch_inner_loop_integrates_camera_ground_and_fallen():
+    # Integration smoke: drive run_watch's inner loop by hand (no display event loop) -- step the
+    # world, ease the camera, and draw with inspector+rings across an egg-opening -> hatch -> follow,
+    # so _draw_ground, _camera_view and draw(fallen=) all compose over an evolving camera without error.
+    from snake_rl.render import Renderer
+    from snake_rl.watch import (_snake_snap, _chicken_snap, _interp_bodies, _interp_chickens)
+    w = generate_world(CFG, seed=5, size=(140.0, 120.0), n_snakes=3, arrivals=True, ego_live=False)
+    ctrl = OpponentController(CFG)                              # unsynced straight-line actor
+    r = Renderer(scale=3, show_inspector=True, show_rings=True)
+    cam = _new_camera(w)
+    prev = cur = (_snake_snap(w), _chicken_snap(w))
+    for i in range(40):
+        _step_world(w, ctrl)
+        prev, cur = cur, (_snake_snap(w), _chicken_snap(w))
+        bodies = _interp_bodies(prev[0], cur[0], 0.5)
+        cpos, cdir = _interp_chickens(prev[1], cur[1], 0.5, w.size)
+        c, z, fallen = _camera_view(cam, w, bodies, r, now=i * 0.1, dt=0.1)
+        r.draw(w, bodies, cpos, cdir, follow_id=cam["follow_id"], cam_center=c, zoom=z, fallen=fallen)
+    r.close()
+
+
 def test_camera_egg_opening_and_hatch_handoff():
     # Polish #2: opening frames the soonest egg (not overview), then hands off follow to the hatchling
     # that appears at the egg once it's gone.
