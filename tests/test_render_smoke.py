@@ -114,6 +114,41 @@ def test_render_draws_arriving_chicken_through_the_whole_drop():
     r.close()
 
 
+def test_anchored_line_does_not_split_across_the_camera_antipode():
+    # Root-cause guard for the stray red "ray that lags": a short line (snake tongue / vision ray) drawn
+    # for an entity near the camera's torus ANTIPODE must NOT split its endpoints a full period apart.
+    from snake_rl.render import TONGUE
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=1)
+    r = Renderer(scale=4)
+    r.draw(w, cam_center=(60.0, 60.0), zoom=2.0)                 # camera at world center
+    head = np.array([0.5, 60.0]); tip = head + np.array([-1.35, 0.0])   # head at the camera's antipode
+    assert abs(r._p(head)[0] - r._p(tip)[0]) > 0.4 * r._perx      # naive per-point transform SPLITS (the bug)
+    a, b = r._line_anchored(TONGUE, head, head, tip, 2)          # anchored keeps the endpoints adjacent (fix)
+    assert abs(a[0] - b[0]) < 6 * r._scale and abs(a[1] - b[1]) < 6 * r._scale
+    r.close()
+
+
+def test_gore_burst_lands_at_camera_correct_screen_position():
+    # Guard: a red eat-burst spawned at a known world position lands at the CAMERA-correct screen spot
+    # (routed through _world_to_canvas), not the old un-offset fit-to-screen spot.
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=1)
+    r = Renderer(scale=4)
+    P = np.array([30.0, 40.0])
+    r.draw(w, cam_center=(40.0, 60.0), zoom=1.5)                 # offset+zoom, burst stays on-canvas
+    r.canvas.fill((0, 0, 0)); r._particles = []
+    r.spawn_eat(P); r._draw_particles()                          # red blood burst at P
+    arr = pygame.surfarray.array3d(r.canvas)                     # [x, y, rgb]
+    red = (arr[:, :, 0] > 120) & (arr[:, :, 1] < 90) & (arr[:, :, 2] < 90)
+    assert red.any()
+    xs, ys = np.where(red); cx, cy = xs.mean(), ys.mean()
+    want = r._world_to_canvas(P)
+    naive = (P[0] * r._base_scale, P[1] * r._base_scale)         # un-offset (what the camera bug would show)
+    dw = float(np.hypot(cx - want[0], cy - want[1]))
+    dn = float(np.hypot(cx - naive[0], cy - naive[1]))
+    assert dw < 70 and dw < dn                                   # near camera-correct, far from un-offset
+    r.close()
+
+
 def test_ground_fully_covers_canvas_at_all_camera_offsets_and_zooms():
     # Phase B polish #3: the camera-locked ground must FULLY cover the canvas at every offset/zoom --
     # no gaps (the red-seam bug was uncovered clear-color bleeding through misaligned tiles). Fill the

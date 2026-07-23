@@ -252,6 +252,19 @@ class Renderer:
         x, y = self._world_to_canvas(xy)
         return (int(x), int(y))
 
+    def _line_anchored(self, color, anchor, p0, p1, width):
+        """Draw a SHORT line whose two endpoints share `anchor`'s torus wrap-image -- offsets are
+        added in screen px from the anchor, not re-wrapped per point. `_world_to_canvas` resolves each
+        point to its OWN nearest-camera image, so for an entity near the camera's torus antipode a
+        1-unit line (a snake's tongue, a vision ray) would split its endpoints a full period apart and
+        streak across the whole screen -- the stray "red ray that lags" bug. Shows on the anchor's
+        image only (fine for a tiny mark). Returns the two canvas points."""
+        ax, ay = self._world_to_canvas(anchor)
+        a = (int(ax + (p0[0] - anchor[0]) * self._scale), int(ay + (p0[1] - anchor[1]) * self._scale))
+        b = (int(ax + (p1[0] - anchor[0]) * self._scale), int(ay + (p1[1] - anchor[1]) * self._scale))
+        pygame.draw.line(self.canvas, color, a, b, width)
+        return a, b
+
     # --- torus-aware primitives ---
     def _circle(self, color, pos, r):
         bx, by = self._world_to_canvas(pos)
@@ -724,10 +737,10 @@ class Renderer:
         if flick:
             reach = 1.5 if snake.dashed else 1.2
             tip = head + d * hr * reach; base = head + d * hr * 0.9
-            pygame.draw.line(self.canvas, TONGUE, self._p(base), self._p(tip), max(2, int(0.14 * self._scale)))
+            self._line_anchored(TONGUE, head, base, tip, max(2, int(0.14 * self._scale)))
             for s2 in (1, -1):
-                pygame.draw.line(self.canvas, TONGUE, self._p(tip),
-                                 self._p(tip + (d * 0.45 + perp * 0.45 * s2) * hr), max(2, int(0.12 * self._scale)))
+                self._line_anchored(TONGUE, head, tip, tip + (d * 0.45 + perp * 0.45 * s2) * hr,
+                                    max(2, int(0.12 * self._scale)))
         if head_sprite is None:                            # procedural eyes only when no head sprite
             for s2 in (1, -1):
                 e = head + d * hr * 0.32 + perp * hr * 0.46 * s2
@@ -921,15 +934,13 @@ class Renderer:
     def _draw_sensors(self, world, head_uw, heading, snake=None):
         head = wrap(head_uw, world.size)
         dirs, dist, kinds = vision_distances(world, head, heading, snake)
+        hx, hy = self._world_to_canvas(head)
         for u, dd, kd in zip(dirs, dist, kinds):
-            nseg = max(2, int(dd))
-            pts = [np.asarray(self._p(wrap(head + u * (dd * k / nseg), world.size))) for k in range(nseg + 1)]
             col = RAY_KIND[int(kd)]
-            for a, b in zip(pts, pts[1:]):
-                if abs(a[0] - b[0]) < self.cw / 2 and abs(a[1] - b[1]) < self.ch / 2:
-                    pygame.draw.line(self.canvas, col, a, b, max(1, SS))
+            end = head + u * dd                                # a straight ray: one anchored line, no seam-split
+            _, b = self._line_anchored(col, head, head, end, max(1, SS))
             if kd != -1:
-                pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
+                pygame.draw.circle(self.canvas, col, b, max(2, SS + 1))
 
     def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None,
              cam_center=None, zoom=1.0, inspector_stats=None, fallen=None):
