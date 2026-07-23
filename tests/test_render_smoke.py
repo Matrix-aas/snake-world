@@ -114,6 +114,24 @@ def test_render_draws_arriving_chicken_through_the_whole_drop():
     r.close()
 
 
+def test_ground_fully_covers_canvas_at_all_camera_offsets_and_zooms():
+    # Phase B polish #3: the camera-locked ground must FULLY cover the canvas at every offset/zoom --
+    # no gaps (the red-seam bug was uncovered clear-color bleeding through misaligned tiles). Fill the
+    # canvas with a magenta sentinel, redraw JUST the ground, and assert not one sentinel pixel remains.
+    w = generate_world(CFG, seed=3, size=(190.0, 150.0), n_snakes=2)   # non-square world (aspect stress)
+    r = Renderer(scale=4)
+    SENT = (255, 0, 255)
+    for cam, zoom in [((0.0, 0.0), 1.0), ((95.0, 75.0), 1.0), ((10.0, 140.0), 2.3),
+                      ((180.0, 5.0), 4.0), ((47.3, 88.9), 1.7), ((190.0, 150.0), 6.0)]:
+        r.draw(w, cam_center=cam, zoom=zoom)      # sets the camera transform state
+        r.canvas.fill(SENT)
+        r._draw_ground()
+        arr = pygame.surfarray.array3d(r.canvas)
+        gap = (arr[:, :, 0] == 255) & (arr[:, :, 1] == 0) & (arr[:, :, 2] == 255)
+        assert not np.any(gap), f"ground left {int(gap.sum())} uncovered px at cam={cam} zoom={zoom}"
+    r.close()
+
+
 def test_render_camera_offset_zoom_and_zero_live_snakes():
     # Phase B increment 1: draw through the camera transform (offset + zoom), including a 0-live-snakes
     # all-eggs world, must not crash; cam_center maps to the canvas center; zoom clamps to [1, ZOOM_MAX].

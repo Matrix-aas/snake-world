@@ -155,6 +155,8 @@ class Renderer:
         self._chick_scale = {}     # per-chicken-sheet body-size normalization (see _load_assets)
         self._arrivals = {}        # sky-drop render state per bird: {pos_key: {"prog": smoothed 0..1}}
         self._ground_surf = None
+        self._ground_tile0 = None       # seamless square grass tile (camera-locked tiling, polish #3)
+        self._ground_tile_cache = {}    # {zoom_bucket: zoom-scaled tile} -- single-bucket, rebuilt on zoom
 
     # --- setup / assets ---
     def _load_assets(self):
@@ -232,7 +234,8 @@ class Renderer:
         self._panel_font = pygame.font.SysFont("menlo,consolas,monospace", max(11, int(13 * self._ss)))
         self._sprite_cache = {}                       # fresh sprites for the new surface format (Pitfall 11)
         self._load_assets()
-        self._ground_surf = self._build_ground()
+        self._ground_tile0 = self._build_ground_tile()   # seamless tile for camera-locked ground (#3)
+        self._ground_tile_cache = {}
         self._motes = self._make_motes(world)
 
     def _world_to_canvas(self, p):
@@ -430,29 +433,51 @@ class Renderer:
         return surf
 
     def _draw_ground(self):
-        """Blit the ground CAMERA-RELATIVE so the backdrop pans + zooms with the world (else entities
-        slide over a frozen wallpaper). `_ground_surf` is a cw x ch tileable grass wallpaper locked to
-        world coords (period cw/base world units). Each frame: sample a (cw/zoom x ch/zoom) window at
-        the camera's world offset -- wrap-blitting up to 4 copies so it tiles seamlessly -- then
-        smoothscale that window up to the full canvas. Output stays canvas-sized at any zoom, so memory
-        is bounded (no giant zoomed surface). ponytail: grass is uniform patchwork, so the wallpaper
-        period need not match the torus period -- a coarse lock to world origin reads fine."""
-        g = self._ground_surf
-        gw, gh = g.get_size()
-        z = max(1e-6, self.zoom)
-        base = self._base_scale
-        sw = max(1, min(gw, int(round(self.cw / z))))          # source window (canvas / zoom), <= one period
-        sh = max(1, min(gh, int(round(self.ch / z))))
-        # world-origin -> texture px of the window's top-left (world_left * base), wrapped into [0, period)
-        sx = float(self._camc[0]) * base - self.cw / (2.0 * z)
-        sy = float(self._camc[1]) * base - self.ch / (2.0 * z)
-        sx0 = int(np.floor(sx)) % gw
-        sy0 = int(np.floor(sy)) % gh
-        src = pygame.Surface((sw, sh)).convert()
-        for bx in (-sx0, -sx0 + gw):                           # up to 4 wrapped copies fill the window
-            for by in (-sy0, -sy0 + gh):
-                src.blit(g, (bx, by))
-        self.canvas.blit(pygame.transform.smoothscale(src, (self.cw, self.ch)), (0, 0))
+        """Blit the ground CAMERA-RELATIVE, artifact-free. `_ground_tile0` is a genuinely SEAMLESS
+        (mutually-tileable variants, no feathered edges) square tile built once; here it's tiled to
+        FULLY cover the canvas -- opaque, edge-to-edge, with a 1-tile margin on every side -- so there
+        are no gaps (the old red-seam bug was uncovered clear-color bleeding through misaligned tiles).
+        World-locked: the tile is scaled by zoom (cached per zoom bucket, NOT rebuilt per frame) so its
+        world span is constant, and offset by -(cam_center*scale) rounded to whole px -- the SAME
+        integer quantization entities use -- so ground and entities scroll in lockstep with zero
+        sub-pixel shimmer. Smooth at any pan/zoom."""
+        zb = round(float(self.zoom), 2)
+        t = self._ground_tile_cache.get(zb)
+        if t is None:
+            base = self._ground_tile0
+            px = max(8, int(round(base.get_width() * self.zoom)))
+            t = base if px == base.get_width() else pygame.transform.smoothscale(base, (px, px))
+            self._ground_tile_cache = {zb: t}                  # single-bucket: re-scale only on zoom change
+        tp = t.get_width()
+        ox = self.cw * 0.5 - float(self._camc[0]) * self._scale   # canvas px of world x=0 (flat wallpaper)
+        oy = self.ch * 0.5 - float(self._camc[1]) * self._scale
+        x0 = int(np.floor(ox)) % tp - tp                       # start <=0 so the left/top edge is covered
+        y0 = int(np.floor(oy)) % tp - tp
+        for x in range(x0, self.cw, tp):
+            for y in range(y0, self.ch, tp):
+                self.canvas.blit(t, (x, y))
+
+    def _build_ground_tile(self):
+        """Seamless square grass tile for camera-locked tiling (Phase B polish #3): a 2x2 patchwork of
+        the mutually-tileable grass variants, each tone-matched (85% toward the shared mean) so cells
+        don't block -- but with NO feathered/alpha edges, so the tile is opaque and repeats seamlessly.
+        Falls back to a single ground.png / a flat fill when assets are missing."""
+        variants = self._assets.get("ground_set") or (
+            [self._assets["ground"]] if "ground" in self._assets else None)
+        T = max(64, int(24 * self._base_scale))
+        if not variants:
+            s = pygame.Surface((2 * T, 2 * T)).convert(); s.fill(BG); return s
+        arrs = [np.transpose(pygame.surfarray.array3d(pygame.transform.smoothscale(v, (T, T))),
+                             (1, 0, 2)).astype(np.float32) for v in variants]
+        gmean = np.mean([a.reshape(-1, 3).mean(0) for a in arrs], axis=0)
+        cells = [pygame.surfarray.make_surface(np.transpose(
+                    np.clip(a + 0.85 * (gmean - a.reshape(-1, 3).mean(0)), 0, 255).astype(np.uint8),
+                    (1, 0, 2))).convert() for a in arrs]
+        tile = pygame.Surface((2 * T, 2 * T)).convert()
+        for j in range(2):
+            for i in range(2):
+                tile.blit(cells[(i + 2 * j) % len(cells)], (i * T, j * T))
+        return tile
 
     def _ground_tileset(self, variants, T, f):
         """Prepare the patchwork tiles once: each variant tone-matched (85% toward the shared mean)
