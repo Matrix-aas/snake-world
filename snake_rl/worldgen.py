@@ -1,6 +1,7 @@
 """Random world generation with rejection sampling."""
 import numpy as np
-from .world import World, Snake, wrap, torus_dist
+from .world import World, wrap, torus_dist
+from .genome import sample_genome
 
 
 def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False):
@@ -44,18 +45,19 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False):
             # ego is live from step 0 (SnakeEnv drives it); every OTHER snake ARRIVES via a
             # guaranteed egg (staggered hatch so they don't all pop at once), ids assigned at hatch.
             p0 = placed[0]
-            w.snakes = [Snake(head_uw=p0.copy(), head=wrap(p0, w.size),
-                              heading=float(rng.uniform(0, 2 * np.pi)), path_uw=[p0.copy()],
-                              target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
-                              _prev_head_uw=p0.copy(), id=0, color_seed=0)]
+            w.snakes = [w._make_snake(wrap(p0, w.size), float(rng.uniform(0, 2 * np.pi)),
+                                      genome=sample_genome(rng), sex=int(rng.integers(0, 2)), lineage=0,
+                                      id=0, color_seed=0, energy=cfg.energy_max,
+                                      target_length=cfg.start_length, rng=rng)]
             w._next_snake_id = 1
             for p in placed[1:]:
                 w.spawn_egg(p, timer=int(rng.integers(cfg.egg_timer // 2, cfg.egg_timer + 1)))
         else:
-            w.snakes = [Snake(head_uw=p.copy(), head=wrap(p, w.size),
-                              heading=float(rng.uniform(0, 2 * np.pi)), path_uw=[p.copy()],
-                              target_length=cfg.start_length, stamina=cfg.s_max, energy=cfg.energy_max,
-                              _prev_head_uw=p.copy(), id=i, color_seed=i) for i, p in enumerate(placed)]
+            w.snakes = [w._make_snake(wrap(p, w.size), float(rng.uniform(0, 2 * np.pi)),
+                                      genome=sample_genome(rng), sex=int(rng.integers(0, 2)), lineage=i,
+                                      id=i, color_seed=i, energy=cfg.energy_max,
+                                      target_length=cfg.start_length, rng=rng)
+                        for i, p in enumerate(placed)]
             w._next_snake_id = n_snakes
     # initial chickens land instantly (arriving=False) so there's food at episode start regardless of
     # the sky-drop presentation, which applies to RUNTIME spawns (population ceiling, not the target rate)

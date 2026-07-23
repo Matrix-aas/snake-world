@@ -23,6 +23,28 @@ class Snake:
     repro_cooldown: int = 0
     stun: int = 0          # >0 => frozen (dizzy) after dashing into a solid; counts down in _move_snake
     speed: float = 0.0     # actual translation speed of the LAST move (0 while stopped/stunned) -> prey sense
+    genome: np.ndarray = None            # (9,) float32; None -> filled to a mid genome by __post_init__
+    sex: int = 0                         # 0=female, 1=male
+    age: int = 0
+    max_lifespan: float = 1e9
+    lineage: int = 0
+    phenotype: object = None             # resolved namedtuple; filled by __post_init__/_make_snake
+
+    def __post_init__(self):
+        # Self-heal raw Snake(...) construction (tests, ad-hoc): a None genome becomes the mid
+        # genome and its phenotype resolves against the default CFG. _make_snake passes both
+        # explicitly, so this is a no-op on the real spawn path.
+        if self.genome is None:
+            from .config import CFG
+            from .genome import resolve_phenotype, GENE_COUNT
+            self.genome = np.full(GENE_COUNT, 0.5, np.float32)
+            self.phenotype = resolve_phenotype(self.genome, CFG)
+            if self.max_lifespan == 1e9:
+                self.max_lifespan = self.phenotype.max_lifespan_base
+        elif self.phenotype is None:
+            from .config import CFG
+            from .genome import resolve_phenotype
+            self.phenotype = resolve_phenotype(self.genome, CFG)
 
     def heading_vec(self):
         return np.array([np.cos(self.heading), np.sin(self.heading)])
@@ -93,11 +115,11 @@ class World:
         else:
             s = np.asarray(size, float)
         self.size = s
-        self.snakes = [Snake(
-            head_uw=s / 2.0, head=wrap(s / 2.0, s), heading=float(self.rng.uniform(0, 2 * np.pi)),
-            path_uw=[(s / 2.0).copy()], target_length=cfg.start_length,
-            stamina=cfg.s_max, energy=cfg.energy_max, _prev_head_uw=(s / 2.0).copy(),
-            id=0, color_seed=0,
+        from .genome import sample_genome
+        self.snakes = [self._make_snake(
+            wrap(s / 2.0, s), float(self.rng.uniform(0, 2 * np.pi)),
+            genome=sample_genome(self.rng), sex=int(self.rng.integers(0, 2)), lineage=0,
+            id=0, color_seed=0, energy=cfg.energy_max, target_length=cfg.start_length, rng=self.rng,
         )]
         self._next_snake_id = 1
         # chickens / obstacles filled by worldgen; default empty
@@ -131,6 +153,24 @@ class World:
         # cache reused across observers within a step (see _cached_render_body). Move bumps it N times
         # in phase 1, then it's stable through phase-2 death checks and (post-eat) through observe.
         self._body_gen = 0
+
+    def _make_snake(self, head, heading, *, genome, sex, lineage, id, color_seed,
+                    energy, target_length, rng):
+        """Single construction path for a live Snake: resolves the genome's phenotype once and
+        caches it on the instance (World.__init__, worldgen founders, _hatch_eggs all route here)."""
+        from .genome import resolve_phenotype
+        ph = resolve_phenotype(genome, self.cfg)
+        jitter = 1.0 + rng.uniform(-self.cfg.lifespan_jitter, self.cfg.lifespan_jitter)
+        return Snake(
+            head_uw=head.copy(), head=head.copy(), heading=heading, path_uw=[head.copy()],
+            target_length=target_length, stamina=ph.s_max, energy=energy,
+            _prev_head_uw=head.copy(), id=id, color_seed=color_seed,
+            genome=genome, sex=int(sex), age=0, max_lifespan=ph.max_lifespan_base * jitter,
+            lineage=lineage, phenotype=ph,
+        )
+
+    def _phenotype_of(self, snake):
+        return snake.phenotype
 
     # --- motion (per-snake workers) ---
     def _slide(self, p0, disp, centers, radii):
@@ -621,11 +661,14 @@ class World:
                 pos = e["pos"][i].copy()
                 sid = self._next_snake_id
                 self._next_snake_id += 1
-                self.snakes.append(Snake(
-                    head_uw=pos, head=wrap(pos, self.size), heading=float(self.rng.uniform(0, 2 * np.pi)),
-                    path_uw=[pos.copy()], target_length=c.start_length,
-                    stamina=c.s_max, energy=c.hatch_energy_frac * c.energy_max, _prev_head_uw=pos.copy(),
-                    id=sid, color_seed=sid,
+                # M1 (Task 3): eggs don't carry a genome yet (Task 8) -- a hatchling samples a fresh
+                # one + random sex; lineage = its own id (always fresh, no separate counter needed).
+                from .genome import sample_genome
+                self.snakes.append(self._make_snake(
+                    wrap(pos, self.size), float(self.rng.uniform(0, 2 * np.pi)),
+                    genome=sample_genome(self.rng), sex=int(self.rng.integers(0, 2)), lineage=sid,
+                    id=sid, color_seed=sid, energy=c.hatch_energy_frac * c.energy_max,
+                    target_length=c.start_length, rng=self.rng,
                 ))
                 n_alive += 1
                 if not is_spawn:                       # only real matings pay repro reward / count as births
