@@ -13,11 +13,22 @@ from .selfplay import OpponentController
 from .sensors import OBS_DIM
 from dataclasses import replace
 
-# WATCH-only richness: 2x obstacle density (rocks/trees) on the big map. Viewer-only -- obstacle COUNT
-# doesn't shift any obs bound (rays report the nearest hit, bounded), so no retrain is needed; the
-# policy threads denser clutter by sight (obstacles are solid-slide + non-lethal stun). Only the
-# n_obstacles_* counts differ from CFG.
-VIEWER_CFG = replace(CFG, n_obstacles_min=CFG.n_obstacles_min * 2, n_obstacles_max=CFG.n_obstacles_max * 2)
+# WATCH tuning (viewer-only, no retrain). Two adjustments, both leaving obs bounds intact:
+#  1. Richer clutter -- 1.5x obstacle density. (2x was measured to STARVE the ecosystem: the policy
+#     trains on 1x, and 2x clutter causes too many dash-stuns / too little open hunting room -> 4x the
+#     starvation, no births. 1.5x reads noticeably denser but stays lively.)
+#  2. Mating gate eased WITHIN the curriculum-swept ranges so organic reproduction stays lively in the
+#     never-resetting persistent world (Pitfall-12-safe -- the policy already experienced these values
+#     during the curriculum; sex is kept required). This is the v1/v2 "runtime ease for viewer
+#     sustainability" playbook applied to v3.
+VIEWER_CFG = replace(
+    CFG,
+    n_obstacles_min=int(CFG.n_obstacles_min * 1.5), n_obstacles_max=int(CFG.n_obstacles_max * 1.5),
+    repro_energy_frac=0.5,     # swept 0.3 -> 0.7; 0.5 sits inside
+    r_mate=9.0,                # swept 12 -> 7; 9 inside
+    mate_steps=1,              # swept 1 -> 2; the easy end
+    repro_length_frac=0.45,    # swept 0.4 -> 0.55; 0.45 inside
+)
 
 
 def _norm_path_for(model_path):
