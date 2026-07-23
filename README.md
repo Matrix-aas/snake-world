@@ -1,149 +1,132 @@
-# Snake-RL
+# Snake World
 
-A 2D continuous-torus **multi-snake ecosystem**, PPO-trained (self-play, one shared brain).
-2–4 snakes spawn per world (population flux up to 6 via reproduction), all driven by the
-*same* policy — there's no genetics, just births and deaths. Snakes hunt fleeing/pecking
-chickens by **sight** (9 vision rays) and **smell**, dodge rocks/trees/each other/their own
-body, sprint with a stamina-limited **dash**, kill rivals by **cut-off** (leaving a corpse
-to scavenge), and **reproduce**: two well-fed snakes that hold mating distance for a few
-steps lay an egg that hatches into a fresh hatchling. Worlds are randomly generated every
-episode, so the policy learns to survive anywhere — not to memorize one map.
+A little **living world** you can leave running like a screensaver. Snakes are born from eggs,
+learn to hunt fleeing chickens, court and reproduce, grow old, hunt each other, and die — and
+because every snake carries a **heritable genome**, you slowly watch *lineages* diverge: some
+lines become fast ambush hunters, some become long-lived breeders, some turn cannibal. Nothing
+here is scripted. One neural network drives every snake, and evolution happens live, in front of
+you.
 
-## Run it (one command, no Python setup)
+![the world](media/screenshot.png)
 
-The `./snake` launcher creates the venv and installs everything on first run, then
-just runs — you never touch pip or activate anything.
+---
 
-```bash
-./snake watch          # watch the ecosystem (a trained model is included)
-./snake train          # train from the last checkpoint (or from scratch: ./snake train --reset)
-```
+## Run it (one command)
 
-(First `./snake` call does a one-time environment setup. Prefer `python3.13`.)
-
-## Watch (pygame)
+**Prerequisites:** `git`, and **Python 3.11+** (3.13 recommended). macOS or Linux (on Windows use
+WSL or Git Bash). That's it — the launcher builds its own virtual environment and installs
+everything (PyTorch, Stable-Baselines3, pygame…) on the first run.
 
 ```bash
-./snake watch                       # fullscreen; the map fits your screen
-./snake watch --windowed            # run in a window instead
-# keys:  SPACE pause · N new world · S sensors · ↑/↓ (or +/-) sim speed · ESC quit
-
-# no window? headless eval prints ecosystem stats instead:
-./snake watch --headless --episodes 10
+git clone https://github.com/Matrix-aas/snake-world.git
+cd snake-world
+./snake watch          # opens the viewer — a trained brain ships with the repo
 ```
 
-The viewer is a **persistent world**: it never resets on a death. Every snake in it —
-including the legacy slot-0 "ego" left over from the single-snake days — is driven by
-the same self-play controller, so there's no separate "deterministic" mode to toggle; it's
-one continuous, stochastic screensaver. A **reseed floor** keeps it alive forever: if the
-live population ever drops below the sustain floor, a fresh snake spawns to bring it back
-up, so a bad run of deaths can't empty the world for good.
-
-The snake is **size-agnostic** — it senses only egocentrically (rays + smell), never the
-map size, and trained on random sizes — so the world is generated to match your screen's
-aspect and it plays any size just fine.
-
-Renders at 60 FPS with the whole scene interpolated between sim steps. Anti-aliased via
-supersampling: glossy tapering snakes with eyes, sprite-sheet chickens that animate
-peck/walk/run by their own behavior state, shaded rocks, swaying trees, eggs, corpses,
-blood/gore bursts on a kill or catch, an egg-hatch effect, soft shadows, a vignette, and
-vision rays tinted by what they hit (red = obstacle, yellow = chicken, purple = own body,
-other tints for rivals/eggs/corpses).
-
-## Train (headless, fast — loads the M1 fully)
+The first `./snake` call sets up a `.venv/` and downloads dependencies (PyTorch is a few hundred
+MB, so give it a minute). Every call after that just runs.
 
 ```bash
-./snake train --steps 8000000 --envs 16    # set --envs to your performance-core count
-# resume from the last checkpoint: same command
-# start over from scratch:          add --reset
+./snake watch --windowed          # run in a window instead of fullscreen
+./snake watch --seed 42           # a specific world instead of a random one
+./snake watch --headless --episodes 20   # no graphics: print ecosystem stats and exit
 ```
 
-Training runs on CPU with `SubprocVecEnv` (many random worlds in parallel) — for a
-tiny MLP this beats GPU/MPS. `--envs` scales with your CPU: ~one env per performance
-core saturates it (on an M1 Pro's 8 performance cores, `--envs 16` is the sweet spot;
-more just oversubscribes). The raycast is vectorized, so each env step is cheap. Only
-snake 0 in each parallel world is the actual PPO learner ("ego"); every other snake in
-that world is driven in-env by a synced snapshot of the ego's own policy (self-play), so
-training a single network produces an entire ecosystem of snakes that "think" the same
-way. It prints running stats (catches, reproductions, hatches, deaths) and saves
-`models/snake.zip` + `models/vecnormalize.pkl` periodically, so you can stop any time
-(Ctrl-C) and `./snake watch` the current checkpoint.
+### Controls (in the viewer)
 
-### How the "deliberate dash" is learned (automatic curriculum)
+| Key | Action |
+|-----|--------|
+| **Arrows** | pan the camera (the map is bigger than the screen) |
+| **Tab** | toggle free camera ↔ follow-a-snake |
+| **`[` / `]`** | follow the previous / next snake |
+| Mouse wheel · **`+` / `-`** | zoom |
+| **`I`** | show the followed snake's genome inspector |
+| **`S`** · **`H`** | toggle vision rays · the stat rings |
+| **`,` / `.`** | slow down / speed up the simulation |
+| **`N`** · **Space** · **Esc** | new world · pause · quit |
 
-The dash is rationed **mechanically, not by a reward penalty**: it needs a full stamina
-reserve to fire and the reserve refills slowly, so a snake must *earn* a dash by walking
-and then spend it in a burst — a stalk-and-pounce rhythm emerges. But a fresh snake has to
-learn *to hunt* (and *to mate*) before it can learn thrift or patience: dropping the hard
-stamina/mating constraints on it from step 0 traps it in "never dash, just survive". So a
-single training run **anneals** both curricula together — easy always-on dash and a loose,
-fast mating gate for the first ~42% of training, then both linearly ramp to their real,
-tight values. No manual phases; just:
+---
+
+## What you're looking at
+
+Every snake shares **one** PPO-trained brain, but each also carries a **genome** of nine genes that
+the brain can *feel* and act on:
+
+- **Body & metabolism** — `size` (reach & strength vs. hunger & turning), `metabolism` (thrifty vs.
+  fast-burning), `speed`, `stamina`, `lifespan` (live-fast-die-young vs. long slow breeder).
+- **Senses** — `senses` trades eyesight range against sense of smell, so different lines literally
+  *perceive the world differently*.
+- **Temperament** — `aggression`, `kin_care`, `boldness`.
+
+A snake's genes decide its body, so a fast-fragile snake and a big-slow one have to play completely
+different games to survive — and that's where the visible diversity comes from. Genes are inherited:
+when two snakes court and the female lays an egg, the egg carries a **crossover + mutation** of both
+parents' genomes and its mother's lineage colour. Over many generations, selection (who survives,
+who breeds) does the rest. **Evolution is a runtime process — the network is not being trained while
+you watch; it's already competent for any genome, and the ecosystem does the evolving.**
+
+Things that emerge on their own, never scripted:
+
+- **Stalk-and-pounce.** Prey fear a snake in proportion to its speed, so a snake that freezes is
+  invisible — snakes learn to hold still near a pecking chicken, then strike.
+- **Weaving through cover.** Rocks and trees are solid but *not lethal* — charging one just stuns
+  you — so snakes learn to slow down and thread gaps rather than avoid clutter.
+- **Cut-off kills.** A snake can trap a rival against its own body, leaving a corpse to scavenge.
+- **Courtship, guarding, and raiding.** Eggs are edible by others, and the reward only lands when an
+  egg actually *hatches*, so parents have a reason to guard — and rivals have a reason to raid.
+
+The map is a **torus** (wrap-around edges), continuous (not a grid), and randomly generated every
+launch, so the brain had to learn to live anywhere rather than memorise one map.
+
+---
+
+## Train your own
+
+A trained brain ships in `models/`, but you can grow your own:
 
 ```bash
-./snake train --steps 8000000 --envs 16 --reset
+./snake train --steps 8000000 --envs 16 --reset   # from scratch (~1.5–2.5h on a laptop CPU)
+./snake train --steps 3000000                      # continue from the current checkpoint
 ```
 
-(This mirrors reward-shaping best practice: warm up on the easy task, then anneal in the
-constraint — an abrupt switch collapses the learned behavior.)
+Training is headless, CPU-only, and uses self-play: opponents are driven by a synced snapshot of the
+same policy, so the brain effectively trains against itself. Watch `snake/eaten_per_window` and
+`snake/repro_per_window` climb in the training log — that's hunting and breeding being discovered.
 
-## What to expect
-
-Fast on an M1 (CPU, vectorized raycast). A full `8M`-step run (~40–75 min, slower than a
-single-snake run since more entities step each frame) produces a policy that, measured over
-a persistent multi-snake ecosystem (`./snake watch --headless --episodes 20`):
-
-- **hunts hard** — ~10–14 chickens / 1000 snake-steps (per snake, not population-summed),
-  `ep_rew_mean` ≈ **+127**, stays well-fed;
-- **dashes deliberately** — a sprint only ~25–36% of live snake-steps, in bursts to run a
-  chicken down or close a cut-off; stamina visibly builds while walking and drains in the
-  pounce;
-- **fights and reproduces** — a real (not accidental) number of `snake`-cause deaths (cut-off
-  predation between rivals), balanced by organic births from egg-laying/hatching, so the
-  population sustains itself around 2–4 snakes without ever dropping below the reseed floor;
-- **rarely clips terrain** — it perceives its own body width (vision is inflated by the head
-  radius), so obstacle deaths are the majority cause but still rare per snake-step;
-- **never eats its own tail** — frame-stacked memory tracks where the body went (`self`
-  deaths ≈ 0).
-
-Random worlds every episode mean it generalizes rather than memorizing a map. Tune any
-constant in `snake_rl/config.py` (the invariants there fail fast if a change breaks a
-feasibility guarantee, e.g. "a dash always catches a fleeing chicken").
-
-## How it works
-
-- **Senses (87 floats, egocentric, frame-stacked ×4 = 348):**
-  - 9 vision rays × 7 channels `[dist, is_obstacle, is_chicken, is_self, is_other_body,
-    is_egg, is_corpse]` — every target is inflated by the head radius so each ray reports
-    *distance until the head edge would touch*, giving the snake awareness of its own width;
-  - social, 7 floats: the nearest rival snake's relative position, heading, size ratio, and
-    whether it's dashing (`has_rival` disambiguates "no rival" from "rival at range 0");
-  - egg, 4 floats: the nearest egg's relative position and whether it's this snake's own
-    (guarding vs. raiding can only diverge once the policy can tell);
-  - smell, 9 floats: three omnidirectional scent fields (chicken / rival snake / corpse),
-    each `[intensity, gradient-forward, gradient-left]`;
-  - proprioception, 4 floats: `[energy, length, stamina, repro_ready]`.
-  - Temporal memory via frame-stacking (no rear vision, so the snake must *remember* where
-    its own body went).
-- **Actions:** `MultiDiscrete([3, 2])` — steer `{left, straight, right}` × dash `{no, yes}`.
-- **Reward:** `+reward_eat` per item eaten (chicken, corpse, or a raided foreign egg),
-  `+reward_repro` only when an egg the snake co-owns actually hatches (not on laying — a
-  raided or population-capped egg pays nothing, so guarding matters), potential-based
-  shaping toward the nearest chicken (provably un-farmable), `reward_death` on any death
-  cause, a small hunger-scaled step cost.
-- **World mechanics, not reward hacks.** Reproduction (mating distance + energy + length
-  gates → egg → hatch), corpses (any death drops scavengeable food), and starvation (energy
-  hitting 0 kills) are physics of the world, not bonuses wired into the reward — cooperation
-  and rivalry both emerge from what's achievable, not from a "be nice"/"be mean" signal.
-- **Balance is guaranteed by construction:** a fleeing chicken is faster than a walking
-  snake, but a full-stamina dash always closes the gap; two snakes can always reach mating
-  distance without a forced collision — asserted as invariants in `config.py`.
-
-All tunable constants live in `snake_rl/config.py`. See `CLAUDE.md` for the full design
-rationale, the hard-won pitfalls, and the retrain recipe.
-
-## Tests
+Run the tests with:
 
 ```bash
 SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest -q
 ```
+
+---
+
+## Project layout
+
+```
+snake              # the launcher (build + run in one command)
+snake_rl/          # the whole thing
+  world.py         #   physics: torus geometry, motion, collisions, reproduction, aging
+  genome.py        #   genes → phenotype, crossover, mutation, relatedness
+  sensors.py       #   what a snake perceives (vision rays + smell + vibration + proprioception)
+  env.py           #   the Gymnasium training environment (reward, action, observation)
+  selfplay.py      #   drives in-world opponents from a policy snapshot
+  train.py         #   PPO training loop + curriculum
+  render.py        #   the pygame viewer
+  watch.py         #   the persistent, never-resetting world you watch
+docs/              # design docs & specs, if you want to see how it was built
+models/            # the trained brain (ships with the repo)
+```
+
+`CLAUDE.md` is a deep engineering log of the whole design and its hard-won lessons, if you're
+curious how a "living" ecosystem gets tuned.
+
+---
+
+## A note on the AI
+
+It's plain reinforcement learning — [PPO](https://arxiv.org/abs/1707.06347) from
+[Stable-Baselines3](https://stable-baselines3.readthedocs.io/), a small MLP, trained on a CPU. The
+"aliveness" doesn't come from a big model; it comes from a world with the right pressures (hunger,
+prey that fear motion, non-lethal clutter, deferred breeding rewards, heritable trade-offs) so that
+believable behaviour is simply the best way to survive.
