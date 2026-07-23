@@ -1,6 +1,6 @@
 import numpy as np
 from snake_rl.config import CFG
-from snake_rl.world import World, Snake, wrap
+from snake_rl.world import World, Snake, wrap, torus_delta
 from snake_rl.worldgen import generate_world
 from snake_rl.sensors import observe, sense_vision, smell, ray_dirs, OBS_DIM
 from snake_rl import genome as gm
@@ -256,31 +256,70 @@ def test_observation_space_contains_crowded_stress_world():
         assert env.observation_space.contains(o), f"snake {s.id} obs out of bounds"
 
 
-def test_long_sight_genome_sees_farther_and_obs_in_bounds():
-    w = generate_world(CFG, seed=5, n_snakes=1)
+def test_per_snake_ray_range_gates_obstacle_detection():
+    # obstacle sits at a hit-distance of 20: INSIDE gene_rayrange_hi (26) but OUTSIDE
+    # gene_rayrange_lo (14). Only a per-snake (genome-resolved) ray_range can tell these two
+    # genomes apart here -- a reversion to the old global CFG.ray_range (20.0, itself >= the
+    # 20 hit-distance) would see the obstacle in BOTH cases, so this fails if that line reverts.
+    w = straight_world()
+    w.obstacle_pos = np.array([[52.0, 30.0]]); w.obstacle_r = np.array([1.0]); w.obstacle_kind = np.array([0])
+    center_idx = CFG.n_rays // 2
+
     hi = np.zeros(gm.GENE_COUNT, np.float32); hi[gm.SENSES] = 1.0   # long ray_range, weak smell
     w.snakes[0] = w._make_snake(w.snakes[0].head, 0.0, genome=hi, sex=0, lineage=1,
                                 id=w.snakes[0].id, color_seed=1, energy=CFG.energy_max,
                                 target_length=CFG.start_length, rng=w.rng)
-    ph = w._phenotype_of(w.snakes[0])
-    assert ph.ray_range == CFG.gene_rayrange_hi
-    obs = observe(w, w.snakes[0])
-    assert np.isfinite(obs).all()
+    assert w.snakes[0].phenotype.ray_range == CFG.gene_rayrange_hi
+    v_hi = sense_vision(w)[center_idx]
+    assert v_hi[1] == 1.0                                 # long sight: obstacle IS seen
 
-
-def test_high_smell_genome_intensity_stays_within_bound():
-    # a max-smell-reach genome must NOT blow the observation bound (§7 smell clip fix)
-    from snake_rl.env import SnakeEnv
-    env = SnakeEnv(seed=1)
-    env.reset()                                # world is None until reset() (review C3)
-    lo = np.zeros(gm.GENE_COUNT, np.float32)   # senses=0 => max smell reach (1.4x)
-    w = env.world
-    s = w.snakes[0]
-    w.snakes[0] = w._make_snake(s.head, 0.0, genome=lo, sex=0, lineage=1, id=s.id,
-                                color_seed=1, energy=CFG.energy_max,
+    lo = np.zeros(gm.GENE_COUNT, np.float32)               # SENSES=0 -> gene_rayrange_lo
+    w.snakes[0] = w._make_snake(w.snakes[0].head, 0.0, genome=lo, sex=0, lineage=1,
+                                id=w.snakes[0].id, color_seed=1, energy=CFG.energy_max,
                                 target_length=CFG.start_length, rng=w.rng)
-    obs = observe(w, w.snakes[0])
-    assert env.observation_space.contains(obs.astype(np.float32))
+    assert w.snakes[0].phenotype.ray_range == CFG.gene_rayrange_lo
+    v_lo = sense_vision(w)[center_idx]
+    assert v_lo[1] == 0.0                                 # short sight: SAME obstacle now out of range
+    assert v_lo[0] == 1.0                                 # ray reports max range (no hit)
+
+
+def test_smell_clip_and_reach_bound_live_rival_intensity():
+    # generate_world(arrivals=False) -> founders are LIVE snakes (not incubating eggs, unlike the
+    # trivial predecessor test which used arrivals=True and left the snake-smell channel at 0
+    # always). Cluster the other n_max-1 rivals right on the observer's head, and give the
+    # observer a low-SENSES genome (smell_reach = gene_smell_lo = 1.4x, the max).
+    w = generate_world(CFG, seed=7, size=(140.0, 140.0), n_snakes=CFG.n_max, arrivals=False)
+    w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros((0,))   # no LOS occlusion -> isolate reach/clip
+    obs = w.snakes[0]
+    lo = np.zeros(gm.GENE_COUNT, np.float32)               # SENSES=0 -> max smell reach
+    w.snakes[0] = w._make_snake(obs.head, obs.heading, genome=lo, sex=0, lineage=1, id=obs.id,
+                                color_seed=1, energy=CFG.energy_max, target_length=CFG.start_length,
+                                rng=w.rng)
+    obs = w.snakes[0]
+    assert obs.phenotype.smell_reach == CFG.gene_smell_lo
+
+    angles = np.linspace(0, 2 * np.pi, len(w.snakes) - 1, endpoint=False)
+    r = 0.05
+    for rival, a in zip(w.snakes[1:], angles):             # park every rival tight on the observer's head
+        rival.head = wrap(obs.head + r * np.array([np.cos(a), np.sin(a)]), w.size)
+        rival.head_uw = rival.head.copy()
+
+    si = smell(w, obs)[3]                                  # snake_intensity channel
+    assert np.isfinite(si) and 0.0 <= si <= CFG.chicken_ceiling
+
+    # raw, un-clipped snake intensity computed independently (mirrors _smell_field's formula with
+    # no obstacles to occlude): sum of smell_reach/(1+dist) over the clustered rivals.
+    dists = np.array([np.linalg.norm(torus_delta(rv.head, obs.head, w.size)) for rv in w.snakes[1:]])
+    raw = float((obs.phenotype.smell_reach / (1.0 + dists)).sum())
+    unscaled_raw = float((1.0 / (1.0 + dists)).sum())
+    # NOTE: at today's n_max=6 (5 rivals), even at max reach (1.4x) and r->0 each term is bounded by
+    # 1, so raw tops out near 5*1.4=6.7 -- structurally short of chicken_ceiling=12 (unlike the corpse
+    # field, which has no population cap -- see test_observation_space_contains_corpse_pileup_beyond_
+    # ceiling). So the clip can't be forced to bite via rival smell alone until Task 11 raises n_max;
+    # what we CAN prove here is that the per-snake reach scaling is genuinely wired in (si tracks the
+    # reach-scaled raw, not the unscaled raw) and the clip is a safe finite no-op in the meantime.
+    assert abs(si - raw) < 1e-4                            # si == reach-scaled raw (clip didn't need to fire)
+    assert raw > unscaled_raw * 1.3                        # reach (1.4x) demonstrably inflates the raw sum
 
 
 def test_observation_space_contains_corpse_pileup_beyond_ceiling():
