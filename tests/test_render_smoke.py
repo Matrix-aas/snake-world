@@ -17,23 +17,22 @@ def test_render_draws_without_error():
     r.close()
 
 
-def test_ground_tile_is_procedural_deterministic_rich_and_seamless():
-    # Polish #3: the ground is now a rich, seamless PROCEDURAL tile (layered integer-freq noise -> a
-    # 3-stop green ramp), replacing the crude '0/1'-looking variant patchwork. It must be byte-identical
-    # across rebuilds (deterministic, no flicker), multi-tone (not a 2-value binary pattern), green, and
-    # seamless at the wrap edge.
+def test_ground_tile_is_sprite_based_deterministic_and_grassy():
+    # The ground tile is built from the codex-vision grass sprites (ground_0..5): a 2x2 tone-matched
+    # patchwork. It must load the sprites, be deterministic across rebuilds (no flicker), be a REAL
+    # multi-tone texture (not a flat/binary fill), and read as green turf. (Seamless camera-locked
+    # coverage is covered separately by test_ground_fully_covers_canvas_at_all_camera_offsets_and_zooms.)
     w = generate_world(CFG, seed=0)
     r = Renderer(scale=6)
-    r.draw(w)                                       # triggers _ensure -> builds _ground_tile0
+    r.draw(w)                                       # triggers _ensure -> builds _ground_tile0 from sprites
+    assert r._assets.get("ground_set"), "grass sprites (ground_0..5) must be loaded"
     a1 = pygame.surfarray.array3d(r._build_ground_tile())
     a2 = pygame.surfarray.array3d(r._build_ground_tile())
-    assert np.array_equal(a1, a2)                                   # deterministic (seeded) -> no flicker
-    assert len(np.unique(a1.reshape(-1, 3), axis=0)) > 200          # rich multi-tone, not binary
-    assert a1[..., 1].std() > 6                                     # green channel actually varies
+    assert np.array_equal(a1, a2)                                   # deterministic -> no flicker
+    assert len(np.unique(a1.reshape(-1, 3), axis=0)) > 200          # a real texture, not a flat/binary fill
+    assert a1[..., 1].std() > 3                                     # green channel actually varies (texture)
     g, rd, bl = a1[..., 1].mean(), a1[..., 0].mean(), a1[..., 2].mean()
     assert g > rd and g > bl                                        # reads as green turf
-    seam = np.abs(a1[0].astype(int) - a1[-1].astype(int)).mean()    # wrap-edge (col 0 vs col T-1)
-    assert seam < 4 * a1[..., 1].std()                             # seamless: edge step << overall variation
     r.close()
 
 
