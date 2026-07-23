@@ -21,11 +21,10 @@ from .world import wrap, torus_delta
 SS = 2                   # supersample factor (draw big, smoothscale down for anti-aliasing)
 TARGET_PX = 860          # display fits ~this many pixels on its long side
 ZOOM_MIN, ZOOM_MAX = 1.0, 6.0     # camera zoom clamp (1 = whole world fits; >1 zooms in)
+GROUND_TILE_WORLD = 44.0          # world-units spanned by one procedural ground tile (camera-locked)
 ASSET_DIR = os.path.join(os.path.dirname(__file__), "assets")
 ASSET_FILES = {
-    "ground": "ground.png",                                     # single-tile fallback (see _build_ground)
-    "ground_set": ["ground_0.png", "ground_1.png", "ground_2.png",   # 6 mutually-tileable grass variants
-                   "ground_3.png", "ground_4.png", "ground_5.png"],  # patchworked into the world backdrop
+    # (ground is now a procedural tile -- see _build_ground_tile; no grass PNGs loaded)
     "rock": ["rock1.png", "rock2.png"],
     "tree": ["tree1.png", "tree2.png"],
     "chicken": "chicken.png",                                   # static fallback for the sheets below
@@ -41,7 +40,6 @@ ASSET_FILES = {
 }
 
 # procedural fallbacks (used only when the matching sprite is missing)
-BG = (34, 46, 30); GRID = (30, 42, 28)
 ROCK = (110, 112, 122); ROCK_HI = (156, 158, 168); ROCK_SH = (60, 62, 72)
 TRUNK = (98, 68, 44); LEAF = (54, 132, 72); LEAF2 = (84, 174, 104)
 CHICK = (247, 243, 231); CHICK_SH = (206, 200, 184); BEAK = (242, 168, 62); EYE = (26, 26, 30); COMB = (226, 74, 74)
@@ -154,9 +152,8 @@ class Renderer:
         self._assets = {}
         self._chick_scale = {}     # per-chicken-sheet body-size normalization (see _load_assets)
         self._arrivals = {}        # sky-drop render state per bird: {pos_key: {"prog": smoothed 0..1}}
-        self._ground_surf = None
-        self._ground_tile0 = None       # seamless square grass tile (camera-locked tiling, polish #3)
-        self._ground_tile_cache = {}    # {zoom_bucket: zoom-scaled tile} -- single-bucket, rebuilt on zoom
+        self._ground_tile0 = None       # seamless procedural ground tile (camera-locked tiling, polish #3)
+        self._ground_tile_cache = {}    # {tile_px: scaled tile} -- multi-bucket so zoom-ease doesn't thrash
 
     # --- setup / assets ---
     def _load_assets(self):
@@ -410,109 +407,56 @@ class Renderer:
         vel = rng.uniform(-0.05, 0.05, size=(n, 2))
         return np.hstack([pos, vel])
 
-    def _build_ground(self):
-        """Pre-tile the world backdrop into one canvas-sized surface (blit once/frame). Uses the 6
-        seamless grass VARIANTS as a hashed patchwork: each grid cell picks a variant deterministically
-        from (col,row) -- stable per-frame AND frame-to-frame (no flicker) -- so the ground reads as
-        natural terrain variation, not one repeated tile. The variants are tone-matched to a shared
-        mean (kills rectangular brightness blocks between cells) and cross-faded over a small overlap
-        band at the cell edges (soft transitions; interiors stay single-tile crisp), so no hard seam
-        shows. Falls back to a single ground.png, then a procedural grid, if assets are missing."""
-        surf = pygame.Surface((self.cw, self.ch)).convert()
-        variants = self._assets.get("ground_set") or (
-            [self._assets["ground"]] if "ground" in self._assets else None)
-        if not variants:
-            surf.fill(BG)
-            step = max(6, int(6 * self._scale))
-            for x in range(0, self.cw, step):
-                pygame.draw.line(surf, GRID, (x, 0), (x, self.ch))
-            for y in range(0, self.ch, step):
-                pygame.draw.line(surf, GRID, (0, y), (self.cw, y))
-            return surf
-        tile_px = int(np.clip(min(self.cw, self.ch) / 3.2, 220, 640))
-        f = max(8, tile_px // 6)                                # cross-fade band width
-        base, feather = self._ground_tileset(variants, tile_px, f)
-        n = len(base)
-
-        def pick(c, r):                                        # deterministic per-cell variant
-            return ((c * 73856093) ^ (r * 19349663)) % n
-        cols, rows = self.cw // tile_px + 1, self.ch // tile_px + 1
-        for r in range(rows):                                  # opaque base pass: crisp interiors
-            for c in range(cols):
-                surf.blit(base[pick(c, r)], (c * tile_px, r * tile_px))
-        for r in range(rows):                                  # feather pass: cross-fade the boundaries
-            for c in range(cols):
-                surf.blit(feather[pick(c, r)], (c * tile_px - f, r * tile_px - f))
-        return surf
-
     def _draw_ground(self):
-        """Blit the ground CAMERA-RELATIVE, artifact-free. `_ground_tile0` is a genuinely SEAMLESS
-        (mutually-tileable variants, no feathered edges) square tile built once; here it's tiled to
-        FULLY cover the canvas -- opaque, edge-to-edge, with a 1-tile margin on every side -- so there
-        are no gaps (the old red-seam bug was uncovered clear-color bleeding through misaligned tiles).
-        World-locked: the tile is scaled by zoom (cached per zoom bucket, NOT rebuilt per frame) so its
-        world span is constant, and offset by -(cam_center*scale) rounded to whole px -- the SAME
-        integer quantization entities use -- so ground and entities scroll in lockstep with zero
-        sub-pixel shimmer. Smooth at any pan/zoom."""
-        zb = round(float(self.zoom), 2)
-        t = self._ground_tile_cache.get(zb)
+        """Draw the ground through the SAME world transform entities use, so it pans + zooms in exact
+        lockstep with no jerk. `_ground_tile0` is a seamless procedural tile spanning GROUND_TILE_WORLD
+        world-units; each frame it's scaled to that span in canvas px (cached PER integer px size, so a
+        smooth zoom-ease reuses recent sizes instead of thrashing a single bucket) and blitted on a flat
+        world-locked grid across the visible region with a 1-tile margin and a +1px overlap -> full
+        coverage, no seams, no integer-period modulo discontinuity (the old jerk). Grass is uniform, so
+        a flat (non-torus) wallpaper reads fine."""
+        scale = self._scale
+        tw = GROUND_TILE_WORLD
+        tps = max(8, int(round(tw * scale)) + 1)               # +1px overlap so adjacent tiles never gap
+        t = self._ground_tile_cache.get(tps)
         if t is None:
-            base = self._ground_tile0
-            px = max(8, int(round(base.get_width() * self.zoom)))
-            t = base if px == base.get_width() else pygame.transform.smoothscale(base, (px, px))
-            self._ground_tile_cache = {zb: t}                  # single-bucket: re-scale only on zoom change
-        tp = t.get_width()
-        ox = self.cw * 0.5 - float(self._camc[0]) * self._scale   # canvas px of world x=0 (flat wallpaper)
-        oy = self.ch * 0.5 - float(self._camc[1]) * self._scale
-        x0 = int(np.floor(ox)) % tp - tp                       # start <=0 so the left/top edge is covered
-        y0 = int(np.floor(oy)) % tp - tp
-        for x in range(x0, self.cw, tp):
-            for y in range(y0, self.ch, tp):
-                self.canvas.blit(t, (x, y))
+            t = pygame.transform.smoothscale(self._ground_tile0, (tps, tps))
+            if len(self._ground_tile_cache) > 12:              # bound the cache during zoom sweeps
+                self._ground_tile_cache = {}
+            self._ground_tile_cache[tps] = t
+        cx, cy = float(self._camc[0]), float(self._camc[1])
+        hw, hh = self.cw / (2 * scale), self.ch / (2 * scale)  # half-viewport in world units
+        i0, i1 = int(np.floor((cx - hw) / tw)) - 1, int(np.floor((cx + hw) / tw)) + 1
+        j0, j1 = int(np.floor((cy - hh) / tw)) - 1, int(np.floor((cy + hh) / tw)) + 1
+        for i in range(i0, i1 + 1):
+            bx = int(np.floor(self.cw * 0.5 + (i * tw - cx) * scale))
+            for j in range(j0, j1 + 1):
+                by = int(np.floor(self.ch * 0.5 + (j * tw - cy) * scale))
+                self.canvas.blit(t, (bx, by))
 
     def _build_ground_tile(self):
-        """Seamless square grass tile for camera-locked tiling (Phase B polish #3): a 2x2 patchwork of
-        the mutually-tileable grass variants, each tone-matched (85% toward the shared mean) so cells
-        don't block -- but with NO feathered/alpha edges, so the tile is opaque and repeats seamlessly.
-        Falls back to a single ground.png / a flat fill when assets are missing."""
-        variants = self._assets.get("ground_set") or (
-            [self._assets["ground"]] if "ground" in self._assets else None)
-        T = max(64, int(24 * self._base_scale))
-        if not variants:
-            s = pygame.Surface((2 * T, 2 * T)).convert(); s.fill(BG); return s
-        arrs = [np.transpose(pygame.surfarray.array3d(pygame.transform.smoothscale(v, (T, T))),
-                             (1, 0, 2)).astype(np.float32) for v in variants]
-        gmean = np.mean([a.reshape(-1, 3).mean(0) for a in arrs], axis=0)
-        cells = [pygame.surfarray.make_surface(np.transpose(
-                    np.clip(a + 0.85 * (gmean - a.reshape(-1, 3).mean(0)), 0, 255).astype(np.uint8),
-                    (1, 0, 2))).convert() for a in arrs]
-        tile = pygame.Surface((2 * T, 2 * T)).convert()
-        for j in range(2):
-            for i in range(2):
-                tile.blit(cells[(i + 2 * j) % len(cells)], (i * T, j * T))
-        return tile
-
-    def _ground_tileset(self, variants, T, f):
-        """Prepare the patchwork tiles once: each variant tone-matched (85% toward the shared mean)
-        and scaled to T (the crisp opaque base), plus an oversized (T+2f) copy with a feathered
-        alpha edge for the overlap cross-fade. Returns (base_surfs, feather_surfs)."""
-        arrs = [np.transpose(pygame.surfarray.array3d(pygame.transform.smoothscale(v, (T, T))),
-                             (1, 0, 2)).astype(np.float32) for v in variants]
-        gmean = np.mean([a.reshape(-1, 3).mean(0) for a in arrs], axis=0)
-        TT = T + 2 * f
-        w = np.clip(np.minimum(np.arange(TT), TT - 1 - np.arange(TT)) / f, 0.0, 1.0)   # edge ramp 0->1
-        alpha = (np.minimum(w[:, None], w[None, :]) * 255).astype(np.uint8)            # symmetric, [x,y]
-        base, feather = [], []
-        for a in arrs:
-            eq = np.clip(a + 0.85 * (gmean - a.reshape(-1, 3).mean(0)), 0, 255).astype(np.uint8)
-            b = pygame.surfarray.make_surface(np.transpose(eq, (1, 0, 2))).convert()
-            base.append(b)
-            big = pygame.transform.smoothscale(b, (TT, TT)).convert_alpha()
-            av = pygame.surfarray.pixels_alpha(big)
-            av[:] = alpha                                     # feather the edges to 0 (overlap blend)
-            del av                                            # unlock the surface before blitting
-            feather.append(big)
-        return base, feather
+        """A RICH, seamless procedural ground tile (Phase B polish #3) -- replaces the crude
+        variant-patchwork ('0/1'-looking) art. Layered integer-frequency trig noise (perfectly tileable
+        over the tile) mapped through a 3-stop organic green ramp (deep shade -> grass -> sun-touched)
+        with a faint high-frequency grain, so the backdrop reads as soft, multi-tone turf that tiles
+        without any seam. No assets, no RNG-per-frame: built once, deterministic."""
+        T = 256
+        yy, xx = (np.mgrid[0:T, 0:T].astype(np.float32)) * (2 * np.pi / T)   # 0..2pi, periodic in T
+        rng = np.random.default_rng(20240723)
+        field = np.zeros((T, T), np.float32)
+        for freq, amp in ((1, 1.0), (2, 0.6), (3, 0.42), (5, 0.26), (8, 0.16), (13, 0.1)):
+            a1, a2, a3, a4 = rng.uniform(0, 2 * np.pi, 4)
+            field += amp * (np.sin(freq * xx + a1) * np.cos(freq * yy + a2)
+                            + 0.6 * np.cos(freq * (xx + yy) + a3) + 0.6 * np.sin(freq * (xx - yy) + a4))
+        field = (field - field.min()) / (np.ptp(field) + 1e-6)              # -> 0..1, seamless
+        c0 = np.array([36, 56, 34], np.float32)     # deep shade / moss
+        c1 = np.array([60, 92, 52], np.float32)     # base grass
+        c2 = np.array([106, 144, 84], np.float32)   # sun-touched blades
+        t = field[..., None]
+        rgb = np.where(t < 0.5, c0 + (c1 - c0) * (t / 0.5), c1 + (c2 - c1) * ((t - 0.5) / 0.5))
+        grain = 0.05 * np.sin(37.0 * xx) * np.sin(41.0 * yy)                 # tileable fine grain
+        rgb = np.clip(rgb * (1.0 + grain[..., None]), 0, 255).astype(np.uint8)
+        return pygame.surfarray.make_surface(np.transpose(rgb, (1, 0, 2))).convert()
 
     # --- scene layers ---
     def _draw_obstacles(self, world):

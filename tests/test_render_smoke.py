@@ -17,23 +17,23 @@ def test_render_draws_without_error():
     r.close()
 
 
-def test_ground_patchwork_is_deterministic_and_varied():
-    # The world backdrop is a hashed patchwork of the 6 seamless grass variants (with a graceful
-    # single-tile / procedural fallback). It must be byte-identical across rebuilds -- stable
-    # per-frame AND frame-to-frame -- so the ground never flickers. When the variant set is present,
-    # the per-cell hash must draw from more than one variant (not collapse to one repeated tile).
+def test_ground_tile_is_procedural_deterministic_rich_and_seamless():
+    # Polish #3: the ground is now a rich, seamless PROCEDURAL tile (layered integer-freq noise -> a
+    # 3-stop green ramp), replacing the crude '0/1'-looking variant patchwork. It must be byte-identical
+    # across rebuilds (deterministic, no flicker), multi-tone (not a 2-value binary pattern), green, and
+    # seamless at the wrap edge.
     w = generate_world(CFG, seed=0)
-    r = Renderer(scale=6, show_sensors=False)
-    r.draw(w)                                       # triggers _ensure -> load assets + build ground
-    g1, g2 = r._build_ground(), r._build_ground()
-    assert g1.get_size() == r.canvas.get_size()
-    assert np.array_equal(pygame.surfarray.array3d(g1), pygame.surfarray.array3d(g2))  # no flicker
-    variants = r._assets.get("ground_set")
-    if variants:                                    # assets present -> a real multi-variant patchwork
-        assert len(variants) == 6
-        n = len(variants)
-        picks = {((c * 73856093) ^ (row * 19349663)) % n for c in range(6) for row in range(6)}
-        assert len(picks) > 1                       # varied, not a single repeated tile
+    r = Renderer(scale=6)
+    r.draw(w)                                       # triggers _ensure -> builds _ground_tile0
+    a1 = pygame.surfarray.array3d(r._build_ground_tile())
+    a2 = pygame.surfarray.array3d(r._build_ground_tile())
+    assert np.array_equal(a1, a2)                                   # deterministic (seeded) -> no flicker
+    assert len(np.unique(a1.reshape(-1, 3), axis=0)) > 200          # rich multi-tone, not binary
+    assert a1[..., 1].std() > 6                                     # green channel actually varies
+    g, rd, bl = a1[..., 1].mean(), a1[..., 0].mean(), a1[..., 2].mean()
+    assert g > rd and g > bl                                        # reads as green turf
+    seam = np.abs(a1[0].astype(int) - a1[-1].astype(int)).mean()    # wrap-edge (col 0 vs col T-1)
+    assert seam < 4 * a1[..., 1].std()                             # seamless: edge step << overall variation
     r.close()
 
 
