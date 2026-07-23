@@ -90,9 +90,28 @@ def color_for(seed, s=0.55, v=0.92):
     return (int(r * 255), int(g * 255), int(b * 255))
 
 
-def _snake_colors(seed):
-    """Head/tail gradient endpoints derived from the snake's hue (tapered body tint)."""
-    return color_for(seed, s=0.42, v=0.96), color_for(seed, s=0.80, v=0.42)
+def _hsv(hue, s, v):
+    r, g, b = colorsys.hsv_to_rgb((hue % 360) / 360.0, max(0.0, min(1.0, s)), max(0.0, min(1.0, v)))
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def _snake_palette(snake):
+    """Genome -> visible phenotype colors (Phase B increment 2). Base HUE = `snake.lineage` (a stable
+    FAMILY color carried down a maternal line via golden angle, so kin read alike across generations);
+    the `aggression` gene warms the hue toward red and raises saturation (vivid = fierce), and
+    `metabolism` raises brightness (fast burners read brighter). Returns (head_color, tail_color,
+    head_tint) for the tapered body gradient + the head-sprite tint. `size` drives the DRAWN body
+    scale in _draw_snake (on top of the longer body its max_length already gives)."""
+    from .genome import METABOLISM, AGGRESSION
+    g = snake.genome
+    aggr = float(g[AGGRESSION]); metab = float(g[METABOLISM])
+    hue = (snake.lineage * 137.5 - 30.0 * aggr) % 360.0     # family hue, warmed toward red by aggression
+    sat = 0.42 + 0.30 * aggr                                # aggressive lines are more saturated
+    val = 0.80 + 0.18 * metab                               # fast metabolism reads brighter
+    head_c = _hsv(hue, sat * 0.85, min(1.0, val + 0.04))
+    tail_c = _hsv(hue, min(1.0, sat + 0.30), val * 0.5)
+    head_tint = _hsv(hue, sat, min(1.0, val + 0.06))
+    return head_c, tail_c, head_tint
 
 
 def _lerp(a, b, t):
@@ -547,11 +566,13 @@ class Renderer:
                 del self._arrivals[k]
 
     def _draw_snake(self, world, snake, body_uw, big=False):
+        from .genome import SIZE
         n = len(body_uw)
-        hr = world.cfg.head_radius
-        head_c, tail_c = _snake_colors(snake.color_seed)
+        sz = 0.85 + 0.30 * float(snake.genome[SIZE])       # size gene -> chunkier drawn body (visual only)
+        hr = world.cfg.head_radius * sz
+        head_c, tail_c, head_tint = _snake_palette(snake)  # lineage family hue + gene-driven sat/value
         wpts = [wrap(body_uw[k], world.size) for k in range(n)]
-        radii = [hr * (1 - k / max(1, n - 1)) + world.cfg.body_radius * 0.7 * (k / max(1, n - 1)) for k in range(n)]
+        radii = [hr * (1 - k / max(1, n - 1)) + world.cfg.body_radius * sz * 0.7 * (k / max(1, n - 1)) for k in range(n)]
         for k in range(n - 1, -1, -1):                     # rim pass
             self._circle(SNAKE_RIM, wpts[k], max(3, int((radii[k] + 0.28) * self._scale)))
         for k in range(n - 1, -1, -1):                     # body pass
@@ -566,7 +587,7 @@ class Renderer:
             self._spawn_dust(head - d * hr * 0.9, -d, hr)
         head_sprite = self._sprite("head", 3.0 * hr * self._scale,
                                    angle=float(np.degrees(np.arctan2(d[1], d[0]))),
-                                   tint=color_for(snake.color_seed, s=0.62, v=0.98))
+                                   tint=head_tint)
         if head_sprite is not None:
             self._blit_world(head_sprite, head)
         flick = snake.dashed or (self._t % 48 < 6)         # forked tongue tasting the air
@@ -595,7 +616,7 @@ class Renderer:
         p = self._p(center)
         lw = max(2, int((0.22 if big else 0.15) * self._scale))
         outline_r = max(3, int((r_out + step * 0.6) * self._scale))
-        pygame.draw.circle(self.canvas, color_for(snake.color_seed), p, outline_r, 1)
+        pygame.draw.circle(self.canvas, color_for(snake.lineage), p, outline_r, 1)   # family-color badge outline
         fracs = (np.clip(snake.energy / c.energy_max, 0.0, 1.0),
                  np.clip(snake.stamina / c.s_max, 0.0, 1.0),
                  np.clip(snake.target_length / c.length_cap, 0.0, 1.0))

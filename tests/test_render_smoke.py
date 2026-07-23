@@ -132,6 +132,25 @@ def test_render_camera_offset_zoom_and_zero_live_snakes():
     r.close()
 
 
+def test_snake_palette_differs_by_lineage_and_genome():
+    # Phase B increment 2: genome -> visible phenotype. Different lineage (family hue) OR different
+    # aggression/metabolism genes must yield a different color; same genome+lineage is stable.
+    from snake_rl.render import _snake_palette
+    from snake_rl.genome import AGGRESSION, METABOLISM
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
+    a, b = w.snakes[0], w.snakes[1]
+    a.lineage, b.lineage = 3, 7                                  # distinct families
+    a.genome = np.full(9, 0.5, np.float32); b.genome = a.genome.copy()
+    assert _snake_palette(a) == _snake_palette(a)               # deterministic
+    assert _snake_palette(a)[0] != _snake_palette(b)[0]         # lineage -> different family hue
+    b.lineage = 3                                                # same family now...
+    b.genome[AGGRESSION] = 1.0; b.genome[METABOLISM] = 1.0      # ...but louder genes
+    assert _snake_palette(a) != _snake_palette(b)               # genes still shift color
+    r = Renderer(scale=4)
+    r.draw(w, follow_id=a.id)                                    # renders (size-gene scaled body) w/o crash
+    r.close()
+
+
 def test_render_sensors_handle_corpse_ray_kind():
     # Force a ray to hit a corpse (kind 5) -- KeyErrors if RAY_KIND isn't extended for it.
     from snake_rl.sensors import vision_distances
