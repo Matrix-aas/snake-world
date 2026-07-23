@@ -792,10 +792,17 @@ class World:
         ate = self.try_eat()
         self.decay_energy()
         for s in self.snakes:
-            if s.alive and s.energy <= 0:
+            if not s.alive:
+                continue
+            s.age += 1
+            if s.energy <= 0:
                 s.alive = False; s.death_cause = "starve"
                 self._spawn_corpse(s)
                 deaths_detailed.append((s.id, "starve"))
+            elif s.age >= s.max_lifespan:
+                s.alive = False; s.death_cause = "age"
+                self._spawn_corpse(s)
+                deaths_detailed.append((s.id, "age"))
         self.maybe_spawn()
         self._resolve_mating()
         hatched_owners = self._hatch_eggs()

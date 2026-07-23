@@ -286,3 +286,17 @@ def test_deaths_detailed_reports_phase2_snake_cause():
     out = w.step(3, 1, 0, opponent_fn=lambda world, s: (3, 1, 0))
     causes = dict(out["deaths_detailed"])
     assert causes.get(0) == "snake" and causes.get(1) == "snake"
+
+
+def test_snake_dies_of_old_age():
+    w = generate_world(CFG, seed=31, n_snakes=1, size=(60.0, 60.0))
+    s = w.snakes[0]
+    s.max_lifespan = 3            # force imminent old age
+    s.energy = CFG.energy_max     # ensure it's not starvation
+    causes = []
+    for _ in range(6):
+        out = w.step(1, 1, 0, opponent_fn=lambda world, sn: (1, 1, 0))
+        causes += [c for _, c in out["deaths_detailed"]]
+        if not s.alive:
+            break
+    assert "age" in causes, "a snake past max_lifespan must die of 'age'"
