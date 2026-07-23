@@ -94,9 +94,9 @@ def _reseed_floor(world, controller):
 
 
 def _step_world(world, controller):
-    """Advance the persistent world one tick. EVERY snake -- including the nominal slot-0 'ego'
-    left over from the single-snake days -- is driven by the SAME synced policy through the
-    controller; no SB3 stepping, no autoreset. Drops a dead snake's frame ring so a later
+    """Advance the persistent world one tick. The viewer world is no-ego (starts as all founder
+    eggs, zero live snakes) -- EVERY snake that hatches is driven by the SAME synced policy through
+    the controller; no SB3 stepping, no autoreset. Drops a dead snake's frame ring so a later
     hatchling reusing that id starts cold (mirrors env.py's per-death ring reset). Then tops the
     population back up to the sustain floor if this step dropped it below (see _reseed_floor) --
     run_watch's gore diff snapshots BEFORE this call, so a reseed reads as a hatch effect for free."""

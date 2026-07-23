@@ -78,3 +78,26 @@ def test_training_world_keeps_one_live_ego():
     # Training needs exactly one live gradient-ego per env (SB3 can't steer an inert egg).
     w = generate_world(CFG, seed=51, n_snakes=3, arrivals=True, ego_live=True)
     assert sum(1 for s in w.snakes if s.alive) >= 1   # the gradient-ego is live
+
+
+def test_free_point_keeps_ego_clearance_when_ego_live():
+    # Task-10 fix: a training world (live ego, no_ego=False) must still reject candidates inside
+    # r_flee of the ego's head -- the check that was stripped outright in ab8cc2c, which silently
+    # changed training-time chicken placement (and the per-episode RNG stream) since maybe_spawn
+    # also calls _free_point. Would FAIL if the gate were removed again (RED-on-revert verified).
+    w = generate_world(CFG, seed=52, n_snakes=2, arrivals=True, ego_live=True)
+    assert not w.no_ego and len(w.snakes) >= 1
+    for _ in range(200):
+        p = w._free_point(CFG.chicken_radius)
+        assert torus_dist(np.array([w.snakes[0].head]), p, w.size)[0] >= CFG.r_flee
+
+
+def test_free_point_skips_ego_clearance_in_no_ego_viewer_world():
+    # A no-ego viewer world (ego_live=False) has no privileged head to keep clear of -- _free_point
+    # must still return a valid in-bounds point (used to place founder/reseed eggs) without erroring.
+    w = generate_world(CFG, seed=53, n_snakes=3, arrivals=True, ego_live=False)
+    assert w.no_ego and sum(1 for s in w.snakes if s.alive) == 0
+    for _ in range(50):
+        p = w._free_point(CFG.chicken_radius)
+        assert p is not None and np.all(np.isfinite(p))
+        assert (p >= 0).all() and (p <= w.size).all()

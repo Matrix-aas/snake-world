@@ -630,6 +630,10 @@ class World:
                 best_clear, best = clear, p
             if clear < radius:
                 continue
+            # ego clearance: only when a privileged live ego exists (training) -- a no-ego viewer
+            # world (founder eggs, no slot-0 ego) skips this so _free_point can place eggs at all.
+            if not self.no_ego and self.snakes and torus_dist(self.head, p, self.size) < self.cfg.r_flee:
+                continue
             live = [o for o in self.snakes if o.alive]      # clear EVERY live snake's body, not just the ego
             body = np.concatenate([self._body_points(o) for o in live], axis=0) if live else np.zeros((0, 2))
             if len(body) and (torus_dist(body, p, self.size) < radius + self.cfg.body_radius).any():

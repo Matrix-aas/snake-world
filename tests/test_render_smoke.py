@@ -52,6 +52,16 @@ def test_ray_kind_covers_other_body_egg_and_corpse():
     assert set(RAY_KIND) == {-1, 0, 1, 2, 3, 4, 5}
 
 
+def test_render_draws_no_ego_all_eggs_viewer_world():
+    # Task 10: a no-ego viewer world (ego_live=False) starts with ZERO live snakes -- guards
+    # render.py's follow_id fallback (line ~62) when there's no snake to follow at all.
+    w = generate_world(CFG, seed=2, size=(120.0, 120.0), n_snakes=3, arrivals=True, ego_live=False)
+    assert sum(1 for s in w.snakes if s.alive) == 0
+    r = Renderer(scale=4)
+    r.draw(w)             # must not raise
+    r.close()
+
+
 def test_render_draws_multisnake_world_with_eggs_and_corpses():
     w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=3)
     w.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([20.0]), "owner": np.array([[0, 1]])}
