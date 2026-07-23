@@ -571,10 +571,11 @@ All tunable numbers live in one frozen `Config`. `assert_invariants(cfg)` runs a
 genomes), because per-snake physiology means one CFG check no longer covers every snake:
 - **HARD (fail fast):** aim **precision** at the max-`size` coarsest turn (this is what caps
   `gene_size_turn_hi ≤ 1.15`), and nearest-image **raycast** at the max-`senses` longest `ray_range`.
-- **SOFT (log, never fail) — invariants 2 & 4 above are downgraded per-genome** (Pitfall 25): the
-  stamina/dash budget (#3, "a full dash closes a fleeing chicken") and self-collision reachability
-  (#6) are single-strategy relics — a slow ambush/scavenge genome and a genome that can't curl onto
-  its (now non-lethal) own body are both valid. Logged so we *know* which genomes are ambush-only.
+- **SOFT (log, never fail) — two invariants are downgraded per-genome** (Pitfall 25): the
+  stamina/dash budget (**#3** above, "a full dash closes a fleeing chicken") and self-collision
+  reachability (**#6** above) are single-strategy relics — a slow ambush/scavenge genome and a genome
+  that can't curl onto its (now non-lethal) own body are both valid. **Aim precision (#4) stays
+  HARD** — it is never softened. Logged so we *know* which genomes are ambush-only.
 
 **World / population (v3):** `world_size 180–260` (bigger — room for 12 snakes, exceeds the screen so
 a Phase-B camera can pan/zoom), `n_start_min/max 3/6`, **`n_max 12`**. **Food scales with population**
