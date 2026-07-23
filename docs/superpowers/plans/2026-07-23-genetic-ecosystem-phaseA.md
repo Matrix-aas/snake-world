@@ -364,16 +364,37 @@ Expected: FAIL (`Snake` has no `genome` / `_phenotype_of` missing).
 
 - [ ] **Step 3a: Extend the `Snake` dataclass** (`world.py` top)
 
-Add fields (keep existing ones):
+Add fields (keep existing ones) **plus a self-healing `__post_init__`** — this is the key move that
+keeps the ~9 existing tests that hand-build raw `Snake(...)` green without editing each (review C1):
 
 ```python
-    genome: np.ndarray = None            # (9,) float32; None only for the transient __init__ placeholder
+    genome: np.ndarray = None            # (9,) float32; None -> filled to a mid genome by __post_init__
     sex: int = 0                         # 0=female, 1=male
     age: int = 0
     max_lifespan: float = 1e9
     lineage: int = 0
-    phenotype: object = None             # resolved namedtuple, set by _make_snake
+    phenotype: object = None             # resolved namedtuple; filled by __post_init__/_make_snake
+
+    def __post_init__(self):
+        # Self-heal raw Snake(...) construction (tests, ad-hoc): a None genome becomes the mid
+        # genome and its phenotype resolves against the default CFG. _make_snake passes both
+        # explicitly, so this is a no-op on the real spawn path.
+        if self.genome is None:
+            from .config import CFG
+            from .genome import resolve_phenotype, GENE_COUNT
+            self.genome = np.full(GENE_COUNT, 0.5, np.float32)
+            self.phenotype = resolve_phenotype(self.genome, CFG)
+            if self.max_lifespan == 1e9:
+                self.max_lifespan = self.phenotype.max_lifespan_base
+        elif self.phenotype is None:
+            from .config import CFG
+            from .genome import resolve_phenotype
+            self.phenotype = resolve_phenotype(self.genome, CFG)
 ```
+
+This makes every `Snake(...)` in the existing suite valid (mid genome, resolved phenotype), so the
+"regression guard" claims in later tasks actually hold. Sex/egg/obs-shape migrations that a mid
+genome can't cover are called out per-task below (C1).
 
 - [ ] **Step 3b: Centralize snake construction.** Add a `World._make_snake(...)` factory and route every `Snake(...)` construction (in `World.__init__`, `_hatch_eggs`, and `worldgen`) through it so genome/sex/lifespan/phenotype are always populated consistently.
 
@@ -397,6 +418,8 @@ def _phenotype_of(self, snake):
 ```
 
 Note: keep `stamina` initialized to the per-snake `ph.s_max` (was `s_max` global). Ensure `World` holds a `self.rng` (it already seeds one in `__init__`); if not, add `self.rng = np.random.default_rng(seed)`.
+
+Note (M1): routing `_hatch_eggs` through `_make_snake` needs a genome, but eggs don't *carry* one until Task 8 — at Task 3, `_hatch_eggs` (and `spawn_egg`'s hatchling) **sample a fresh genome** via `genome.sample_genome(self.rng)` and a random sex; Task 8 replaces the sample with the egg's carried genome. If `_lay_egg` exists (world.py:~590), thread the new `(genome, lineage)` params through it in Task 8, not here.
 
 - [ ] **Step 3c: Populate genomes at world construction.** In `worldgen.generate_world`, when creating live founders, sample a genome per snake and a random sex, assign a fresh `lineage` id (e.g. incrementing counter), and call `world._make_snake(...)`. (The all-eggs viewer path is Task 10; for now founders may be live so existing tests keep working.)
 
@@ -491,6 +514,9 @@ Expected: FAIL (physics still uses global CFG; fast-genome test shows no speed d
     - `_prune_path` (`world.py:231`): slack `target_length + ph.v_dash`.
     Since `_body_points_uw`/`_prune_path` take a `snake`, read `snake.phenotype.v_dash` inside.
   - Per-step hunger: `snake.energy -= ph.energy_decay`.
+  - **Stun-branch regen (M2):** the frozen/stunned branch also regens stamina (`world.py:~179`,
+    `s.stamina = min(c.s_max, s.stamina + c.stamina_regen)`) — route it through `ph.s_max` /
+    `ph.stamina_regen` too, or a high-`s_max` genome mis-regens while stunned.
 
   Concrete example for the dash gate in `_move_snake` (adapt to the real code):
 
@@ -558,6 +584,7 @@ def test_long_sight_genome_sees_farther_and_obs_in_bounds():
 def test_high_smell_genome_intensity_stays_within_bound():
     # a max-smell-reach genome must NOT blow the observation bound (§7 smell clip fix)
     env = SnakeEnv(seed=1)
+    env.reset()                                # world is None until reset() (review C3)
     lo = np.zeros(gm.GENE_COUNT, np.float32)   # senses=0 => max smell reach (1.4x)
     w = env.world
     s = w.snakes[0]
@@ -624,7 +651,7 @@ from snake_rl.config import CFG
 
 
 def _ready_pair(seed, sexA, sexB, dist=3.0):
-    w = generate_world(CFG, seed=seed, n_snakes=2, size=(60.0, 60.0))
+    w = generate_world(CFG, seed=seed, n_snakes=2, size=(100.0, 100.0))   # >2*(ray_range_max+obst+head) (M4)
     import numpy as np
     a, b = w.snakes[0], w.snakes[1]
     # place them close, well-fed, grown, off cooldown, opposite/same sex per args
@@ -664,10 +691,12 @@ Expected: `test_same_sex...` FAILS (current code ignores sex).
 
 - [ ] **Step 3: Add the sex gate.** In `_resolve_mating` (world.py), add `a.sex != b.sex` to the pair-eligibility predicate (alongside the energy/length/cooldown/`repro_ready` checks). Keep the existing mate-streak-by-`frozenset` machinery.
 
+- [ ] **Step 3b: Migrate the existing sex-less mating test (review C1).** `test_mating_lays_egg_after_streak_and_costs_energy` (tests/test_reproduction.py:~17) never sets sexes → both default `sex=0` → can no longer lay. Set the two snakes to opposite sexes (`snakes[0].sex = 0; snakes[1].sex = 1`) right after they're made well-fed/grown. Re-run it to confirm it still lays.
+
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/test_reproduction.py -q`
-Expected: PASS.
+Expected: PASS (incl. the migrated `test_mating_lays_egg_after_streak_and_costs_energy`).
 
 - [ ] **Step 5: Commit**
 
@@ -771,8 +800,10 @@ def test_egg_carries_crossover_genome_and_maternal_lineage():
     assert laid_idx is not None
     child = w.eggs["genome"][laid_idx]
     assert child.shape == (gm.GENE_COUNT,)
-    assert set(np.unique(np.round(child, 6))).issubset({0.0, 1.0}) or True  # crossover+mutation
-    assert w.eggs["lineage"][laid_idx] == 77   # maternal lineage
+    assert (child >= 0).all() and (child <= 1).all()
+    # parents are all-0 / all-1, mutation sigma small => every gene stays NEAR a parent value
+    assert ((child < 0.2) | (child > 0.8)).all(), "child genes should be a mutated per-gene parent pick"
+    assert w.eggs["lineage"][laid_idx] == 77   # maternal lineage (female's)
 
 
 def test_eaten_egg_reported_in_step_return():
@@ -810,15 +841,20 @@ Expected: FAIL.
 
 - [ ] **Step 3b: Female lays the egg (not midpoint spawner).** In `_resolve_mating`, on a completed courtship: identify the female (`sex==0`), compute the child genome `mutate(crossover(a.genome, b.genome, rng), rng, cfg.mutation_sigma)`, lineage = female's lineage, `owner=[female.id, male.id]`. Place the egg at the existing collision-safe parents-midpoint (`world.py:656`) — do NOT use `_free_point`. Append genome+lineage in lockstep.
 
-- [ ] **Step 3c: `_snake_eat` returns eaten-egg owner-sets.** When a non-owner eats an egg, collect `frozenset(int(x) for x in owner_row)` for each eaten egg with `owner[0] >= 0` into a list; return it (thread up through `step`'s return dict as `"eaten_eggs"`).
+- [ ] **Step 3c: `_snake_eat` returns eaten-egg owner-sets — thread through `try_eat` too (review I4).** When a non-owner eats an egg, collect `frozenset(int(x) for x in owner_row)` for each eaten egg with `owner[0] >= 0` into a list. This must pass through **three** signatures: `_snake_eat` (world.py:530, currently `return n`), the `try_eat` wrapper between it and `step` (world.py:532-542, currently returns only `ate_ego`, consumed at world.py:744), and finally `step`'s return dict as `"eaten_eggs"`. Change all three; don't skip `try_eat`.
 
 - [ ] **Step 3d: `_hatch_eggs` uses carried genome + random sex + lineage.** At `world.py:628`, instead of a default genome, pass `genome=e["genome"][i]`, `sex=int(self.rng.integers(0, 2))`, `lineage=int(e["lineage"][i])` into `_make_snake` (a guaranteed arrival egg with owner<0 carries a freshly-sampled founder genome — set that in `spawn_egg`).
 
 - [ ] **Step 3e: `spawn_egg` (arrival) carries a fresh founder genome + lineage.** Give arrival eggs `genome=sample_genome(self.rng)` and a new lineage id, `owner=[-1,-1]` unchanged.
 
-- [ ] **Step 3f: `_repro_ready` size-relative.** In `sensors._repro_ready`, change the length gate to `snake.target_length > cfg.repro_length_frac * snake.phenotype.max_length` (was `> cfg.repro_length_min`). Keep energy + cooldown checks.
+- [ ] **Step 3f: size-relative repro gate — BOTH the sensor AND the actual mating gate (review I1).** The observed `repro_ready` bit and the real eligibility must agree, or the curriculum drives one but not the other.
+  - `sensors._repro_ready`: length gate → `snake.target_length > frac * snake.phenotype.max_length`.
+  - `_resolve_mating` eligibility (world.py:~650): replace the inline `c.repro_length_min` check with the same `frac * snake.phenotype.max_length`.
+  - **Curriculum reconciliation (read the existing plumbing FIRST):** `set_hardness` currently sweeps the *absolute* `repro_length_min` and exposes it to BOTH `_resolve_mating` and `_repro_ready` through some mechanism (a world-level shadow field and/or an effective-cfg — inspect `env.set_hardness` + how `_repro_ready(cfg, snake)` sees the swept value before writing code). Replace that swept *absolute* with a swept **fraction** applied to `snake.phenotype.max_length`, using the **identical exposure mechanism** so both the observed bit and the real gate stay in lockstep. Add `repro_length_frac_easy: float = 0.4` to `Config`; interpolate `frac` from `repro_length_frac_easy` → `repro_length_frac` as hardness 0→1. Keep energy + cooldown checks unchanged.
 
 - [ ] **Step 3g: `step` return + reward hook.** Add `"eaten_eggs"` to the `step` return dict (default `[]`). (The env consumes it in Task 12.)
+
+- [ ] **Step 3h: Migrate existing egg-dict tests (review C1).** Guarantee every world-internal egg creation (`World.__init__`, `spawn_egg`, `_lay_egg`) writes ALL FIVE keys `pos/timer/owner/genome/lineage` (a `_empty_eggs()` helper returning the 5-key dict keeps this DRY). Then grep the suite for tests that assign a **raw** `world.eggs = {...}` or index `eggs[...]` and add `"genome"`/`"lineage"` (reviewer flagged neighborhoods: tests/test_reproduction.py:~41,72; tests/test_multisnake.py:~153,161; tests/test_selfplay.py:~113,128 — verify which actually build raw dicts vs. go through world methods; only raw-dict builders need editing). Run each touched test file to confirm no `KeyError`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -899,6 +935,7 @@ def test_env_obs_space_matches_layout_for_extreme_genomes():
     assert env.observation_space.shape[0] == OBS_DIM * env.cfg.frame_stack or \
            env.observation_space.shape[0] == OBS_DIM  # single-frame space; framestack is external
     from snake_rl import genome as gm
+    env.reset()                      # world is None until reset() (review C3)
     w = env.world
     for gval in (0.0, 1.0):
         g = np.full(gm.GENE_COUNT, gval, np.float32)
@@ -916,12 +953,14 @@ Run: `SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/t
 Expected: FAIL (`OBS_DIM` still 113; new channels absent).
 
 - [ ] **Step 3a: sensors.py** — implement the four additions:
-  - **Per-ray motion:** in `sense_vision`, widen from 8 to 9 features/ray; feature 8 = state-nominal speed of the hit target (look up the hit entity by `idx`; for a chicken map its FSM state → {peck:0, walk:v_wander, flee/startle:v_flee}; for a snake use its `speed`; else 0), normalized by `c.v_dash * c.gene_speed_hi`, clipped [0,1].
+  - **Per-ray motion (review I3 — a parallel array, NOT an idx lookup).** `_cast` returns `idx` into the *concatenated* `_all_targets` array, and `_other_hazard` flattens all rivals' body points, so per-target speed is **not recoverable from `idx`**. Thread a parallel `motion` array through the cast: in `_all_targets`, build a `motion` value per target *row* (chicken → state-nominal speed `{peck:0, walk:v_wander, flee/startle:v_flee}` from the chicken FSM arrays; rival body/head rows → that rival's `speed`; obstacle/self/egg/corpse → 0); return it alongside `cen/rad/kind`. In `_cast`/`_scan`, index it by the winning `idx` (like `kind`) to get per-ray `motion`. In `sense_vision`, widen to 9 features/ray and set feature 8 = `motion_hit / (c.v_dash * c.gene_speed_hi)` clipped [0,1] (observer-independent max). State-nominal (not instantaneous) resolves the peck-hen-0 vs. startle-freeze-0 collision (spec §7).
   - **Social:** extend `_social` return from 7 to 11 with `relatedness(snake.genome, r.genome)`, `r.energy/c.energy_max`, `_repro_ready(c, r)`, `float(r.sex)`.
-  - **Vibration:** add `sense_vibration(world, snake)` — a `_smell_field`-style field (reuse the machinery, no occlusion) over rivals+fleeing-chickens weighted by `speed/(c.v_dash*c.gene_speed_hi)`, returns `[intensity, grad_fwd, grad_left]`, clipped to `±(n_max+chicken_ceiling)`.
-  - **Proprio:** append `float(snake.sex)`, `clip(age/max_lifespan,0,1)`, `clip(stun/stun_steps,0,1)`, and `snake.genome` (9). Change `stamina`/`length`/`speed` normalizers to per-snake (`snake.phenotype.s_max`, `.max_length`, `.v_dash`).
+  - **Vibration (review I2 — bound from cfg, and `_smell_field` needs a weight param).** Add `sense_vibration(world, snake)`: a field over rivals + fleeing chickens, each weighted by `speed/(c.v_dash*c.gene_speed_hi)`. `_smell_field(world, head, positions)` (sensors.py:124) has **no weights arg** — add an optional `weights=None` to it (multiply each term's `1/(1+r)` intensity and gradient by the weight) rather than a second copy. Skip occlusion for vibration (un-occluded is its whole point — pass a flag or a separate un-occluded path). Return `[intensity, grad_fwd, grad_left]`, **clipped to `±(c.n_max + c.chicken_ceiling)`** (derive from cfg — do NOT hardcode 24; it becomes 12+24=36 after Task 11).
+  - **Proprio:** append `float(snake.sex)`, `clip(age/max_lifespan,0,1)`, `clip(stun/c.stun_steps,0,1)`, and `snake.genome` (9). Change `stamina`/`length`/`speed` normalizers to per-snake (`snake.phenotype.s_max`, `.max_length`, `.v_dash`).
   - Update `OBS_DIM = 143` and the module docstring layout.
-- [ ] **Step 3b: env.py** — rewrite `_make_observation_space` bounds to match the new 143 layout (hand-enumerate per block as the current code does; genome tail bounds `[0,1]`, vibration `±24`, motion `[0,1]`, sex `{0,1}`, age/stun `[0,1]`).
+
+- [ ] **Step 3a-migrate: existing obs-shape tests (review C1).** `test_obs_shape_and_bounds` (tests/test_sensors.py:~26,29) asserts `OBS_DIM == 113` and reshapes `o[:88] → (11,8)`; update to `143` and `o[:99] → (11,9)`. `_add_rival` (tests/test_sensors.py:~16) builds a raw rival Snake — with the Task-3 `__post_init__` it now has a mid genome, so `_social`'s `relatedness(snake.genome, r.genome)` works; verify no other raw-rival test passes `genome=None` explicitly.
+- [ ] **Step 3b: env.py** — rewrite `_make_observation_space` bounds to match the new 143 layout (hand-enumerate per block as the current code does; genome tail bounds `[0,1]`, **vibration `±(cfg.n_max + cfg.chicken_ceiling)`** derived from cfg exactly like the smell bounds — NOT a literal, review I2, motion `[0,1]`, sex `{0,1}`, age/stun `[0,1]`).
 - [ ] **Step 3c: selfplay.py** — no code change expected (it imports `OBS_DIM` and builds `Box(-inf,inf,(OBS_DIM*n_stack,))` + `MultiDiscrete([4,3,2])`); confirm it picks up 143.
 
 - [ ] **Step 4: Run tests + parity + check_env**
@@ -985,11 +1024,11 @@ Run: `SDL_VIDEODRIVER=dummy PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/t
 Expected: FAIL (`ego_live` kwarg missing; egg-only world crashes in `step`).
 
 - [ ] **Step 3a: `world.step` no-ego bifurcation.** Guard `world.py:727-729`: if there are no live snakes (or no privileged ego), skip the `ego = self.snakes[0]` reads and return the dict with `died=None`/`ego_dashed=False`. Keep the full ego path when a live ego exists (training).
-- [ ] **Step 3b: `_free_point` ego-strip.** Remove the `self.head`/`r_flee`-of-ego rejection (`world.py:563-565`); keep the `body_radius`-of-any-live-body rejection so eggs still avoid overlapping snakes. This unblocks placing founders when no ego exists.
+- [ ] **Step 3b: `_free_point` ego-strip (M3).** Remove ONLY the `self.head`/`r_flee`-of-ego rejection (`world.py:563-564`); **keep** the `body_radius`-of-any-live-body rejection that begins at `world.py:565` so eggs still avoid overlapping snakes. This unblocks placing founders when no ego exists.
 - [ ] **Step 3c: `_ego_prop`/`_prune_dead`/`__init__` guards.** Make the `head`/`heading` ego descriptors and `_prune_dead` tolerate `len(self.snakes)==0` or no live snake (return a neutral default; nothing should assume slot-0 is alive).
 - [ ] **Step 3d: worldgen.** Add `ego_live: bool = True` param. When `arrivals=True`:
   - `ego_live=True` (training): spawn snake 0 live (as today), rest as arrival eggs.
-  - `ego_live=False` (viewer): spawn NO live snakes; lay `n_snakes` arrival eggs via `spawn_egg`.
+  - `ego_live=False` (viewer): spawn NO live snakes; lay `n_snakes` arrival eggs via `spawn_egg` (M3: do the `_free_point` placement for the eggs first, and simply never append live snakes — don't build-then-empty `w.snakes`).
 - [ ] **Step 3e: env.reset** — pass `arrivals=True, ego_live=True`.
 - [ ] **Step 3f: watch** — `_new_ecosystem`/`generate_world` calls use `ego_live=False`; guard `run_watch` `follow_id = world.snakes[0].id` and `_step_world`'s `ego = world.snakes[0]` for an empty live set (fall back to "no follow / overview", drive only live snakes).
 
@@ -1072,23 +1111,25 @@ from snake_rl.env import SnakeEnv
 from snake_rl import genome as gm
 
 
-def test_reset_randomizes_genomes_across_snakes():
+def test_reset_randomizes_genomes_across_the_founder_population():
+    # arrivals=True => world.snakes holds only the live gradient-ego; the other founders are
+    # PENDING EGGS. Domain randomization must vary genomes across ego + pending egg genomes (C2).
     env = SnakeEnv(seed=4)
     env.reset()
     genomes = [s.genome for s in env.world.snakes]
-    # at least two distinct genomes among the initial population (domain randomization)
+    if len(env.world.eggs.get("genome", [])):
+        genomes += list(env.world.eggs["genome"])
     assert len({tuple(np.round(g, 4)) for g in genomes}) >= 2
 
 
-def test_egg_lost_penalty_applies_when_enabled():
+def test_egg_lost_reward_only_for_ego_owned_eggs():
+    import dataclasses
     env = SnakeEnv(seed=4)
     env.reset()
-    env.cfg_egg_lost = -4.0    # or monkeypatch the reward constant per the impl
+    env.cfg = dataclasses.replace(env.cfg, reward_egg_lost=-4.0)   # Config is frozen (M5)
     ego = env.world.snakes[0]
-    # fabricate an eaten egg co-owned by the ego in the step return path
-    # (unit-level: call the reward helper directly if the impl exposes one)
-    r = env._egg_lost_reward([frozenset({ego.id, 123})])
-    assert r == -4.0
+    assert env._egg_lost_reward([frozenset({ego.id, 123})]) == -4.0   # ego co-owns -> penalized
+    assert env._egg_lost_reward([frozenset({999, 123})]) == 0.0       # not ego's egg -> nothing
 ```
 
 Note: adapt the second test to however the reward is wired — the intent is: an eaten egg the ego co-owns yields `reward_egg_lost`; a foreign egg the ego does not own yields 0.
