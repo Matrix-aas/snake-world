@@ -172,6 +172,7 @@ class World:
         from .genome import resolve_phenotype
         ph = resolve_phenotype(genome, self.cfg)
         jitter = 1.0 + rng.uniform(-self.cfg.lifespan_jitter, self.cfg.lifespan_jitter)
+        target_length = min(target_length, ph.max_length)      # never start above the snake's own max
         return Snake(
             head_uw=head.copy(), head=head.copy(), heading=heading, path_uw=[head.copy()],
             target_length=target_length, stamina=ph.s_max, energy=energy,
@@ -585,7 +586,7 @@ class World:
                 n += ne
                 energy_gain += ne * self.cfg.egg_food
         if n:
-            s.target_length = min(self.cfg.length_cap,
+            s.target_length = min(s.phenotype.max_length,          # per-snake cap: the size gene's payoff
                                    s.target_length + n * self.cfg.grow_per_chicken)
             s.energy = min(self.cfg.energy_max, s.energy + energy_gain)
             self._body_gen += 1                          # growth changes body length -> invalidate cache

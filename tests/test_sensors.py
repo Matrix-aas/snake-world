@@ -251,7 +251,9 @@ def test_repro_ready_toggles_on_three_way_gate():
 
 def test_size_ratio_capped_at_one_for_max_length_rival():
     w = straight_world()
-    _add_rival(w, [45.0, 30.0], target_length=CFG.length_cap)
+    # size_ratio now normalizes by the LARGEST reachable body (length_cap * gene_size_len_hi); a rival
+    # at/above that clips to 1.0 (bodies grow to their per-snake max_length, up to gene_size_len_hi).
+    _add_rival(w, [45.0, 30.0], target_length=CFG.length_cap * CFG.gene_size_len_hi + 5.0)
     o = observe(w)
     assert o[104] == 1.0                                # size_ratio (social[5] @ 99+5)
 

@@ -91,8 +91,7 @@ class Config:
     # r_mate 4, mate_steps 4, repro_cost 30, repro_cooldown 120 -- then eased these at runtime; v2
     # trains on the eased values directly, see CLAUDE.md history). Task 8 NOTE: the length gate is now
     # the size-RELATIVE, curriculum-swept repro_length_frac (below) -- THAT is the observed constant
-    # (sensors._repro_ready, Pitfall 12); repro_length_min/_easy are LEGACY (no gate reads them).
-    repro_length_min: float = 8.0    # LEGACY absolute gate (superseded by size-relative repro_length_frac)
+    # (sensors._repro_ready, Pitfall 12). The old absolute repro_length_min/_easy gate is gone.
     r_mate: float = 7.0              # mating distance
     mate_steps: int = 2              # steps two qualified snakes must hold mating distance
     repro_cost: float = 18.0         # energy spent by each parent on a successful mating
@@ -106,7 +105,6 @@ class Config:
     # so reproduction is easy to DISCOVER early, then tightens as hardness ramps to 1.0)
     r_mate_easy: float = 12.0
     mate_steps_easy: int = 1
-    repro_length_min_easy: float = 6.0   # LEGACY (see repro_length_min; curriculum now sweeps repro_length_frac_easy)
     # sensing
     n_rays: int = 9
     n_fwd_rays: int = 2              # extra forward rays; RAY_COUNT = n_rays + n_fwd_rays = 11
@@ -179,8 +177,10 @@ def assert_invariants(cfg: Config) -> None:
     # (3) aiming precision: can point into the eat corridor
     assert math.radians(cfg.turn_deg) / 2 < math.atan(cfg.eat_radius / cfg.r_flee), \
         "turn_deg too coarse to aim at chickens"
-    # body never wraps to meet its own head across the seam
-    assert cfg.length_cap < cfg.world_size_min / 2, "length_cap must stay below half the smallest world"
+    # body never wraps to meet its own head across the seam -- the size gene lets a body grow to
+    # length_cap * gene_size_len_hi (the largest phenotype's max_length), so guard the REACHABLE max
+    assert cfg.length_cap * cfg.gene_size_len_hi < cfg.world_size_min / 2, \
+        "largest-phenotype body (length_cap * gene_size_len_hi) must stay below half the smallest world"
     # (4) self-collision must be physically reachable: tightest full curl fits within the body length
     turn_circumference = 2 * math.pi * cfg.v_snake / math.radians(cfg.turn_deg)
     assert turn_circumference < cfg.length_cap, "turn radius too wide for the body to curl onto itself"

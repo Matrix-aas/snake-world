@@ -11,8 +11,7 @@ def test_gymnasium_check_env():
 
 def test_env_obs_space_matches_layout_for_extreme_genomes():
     env = SnakeEnv(seed=2)
-    assert env.observation_space.shape[0] == OBS_DIM * env.cfg.frame_stack or \
-           env.observation_space.shape[0] == OBS_DIM  # single-frame space; framestack is external
+    assert env.observation_space.shape[0] == OBS_DIM  # single-frame space; framestack is external
     from snake_rl import genome as gm
     env.reset()                      # world is None until reset() (review C3)
     w = env.world

@@ -101,10 +101,12 @@ def _step_world(world, controller):
     population back up to the sustain floor if this step dropped it below (see _reseed_floor) --
     run_watch's gore diff snapshots BEFORE this call, so a reseed reads as a hatch effect for free."""
     # The viewer world is no-ego (all snakes equal): the positional action is IGNORED by world.step,
-    # which drives every live snake via opponent_fn. Pass a live snake's action when one exists (and
-    # a harmless default when the world is all-eggs) so this also stays correct for an ego world.
+    # which drives EVERY live snake via opponent_fn. So DON'T call controller.act for the positional
+    # slot here -- that snake is also driven by opponent_fn, and a second act() would roll its frame
+    # ring twice (two identical newest frames -> corrupt velocity signal). Pass a constant instead.
+    # In an ego world the positional action drives snakes[0] (not covered by opponent_fn), so act() it.
     live = [s for s in world.snakes if s.alive]
-    a = controller.act(world, live[0]) if live else (1, 1, 0)
+    a = (1, 1, 0) if world.no_ego else (controller.act(world, live[0]) if live else (1, 1, 0))
     out = world.step(*a, opponent_fn=lambda w, s: controller.act(w, s))
     for sid, _cause in out["deaths_detailed"]:
         controller.reset_snake(sid)

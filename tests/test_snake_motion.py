@@ -44,6 +44,34 @@ def test_straight_move_advances_by_v_snake():
     assert abs(np.linalg.norm(w.head_uw - h0) - ph.v_snake) < 1e-6
 
 
+def test_size_gene_caps_body_growth_at_per_snake_max_length():
+    # The size gene must have a BENEFIT: a body grows to its OWN phenotype.max_length, not the global
+    # length_cap. Small size (gene 0) -> max_length 24*0.65=15.6 (below length_cap); large size
+    # (gene 1) -> 24*1.35=32.4 (above it). Feed both well past 24 and check each caps at its own max.
+    w = generate_world(CFG, seed=3, n_snakes=2)
+    small_g = np.full(gm.GENE_COUNT, 0.5, np.float32); small_g[gm.SIZE] = 0.0
+    large_g = np.full(gm.GENE_COUNT, 0.5, np.float32); large_g[gm.SIZE] = 1.0
+    small = w._make_snake(w.snakes[0].head, 0.0, genome=small_g, sex=0, lineage=1,
+                          id=w.snakes[0].id, color_seed=1, energy=CFG.energy_max,
+                          target_length=CFG.start_length, rng=w.rng)
+    large = w._make_snake(w.snakes[1].head, 0.0, genome=large_g, sex=1, lineage=2,
+                          id=w.snakes[1].id, color_seed=2, energy=CFG.energy_max,
+                          target_length=CFG.start_length, rng=w.rng)
+    w.snakes[0] = small; w.snakes[1] = large
+    assert small.phenotype.max_length < CFG.length_cap < large.phenotype.max_length  # 15.6 < 24 < 32.4
+
+    for s in (small, large):                       # sequential so no cross-eating (shared chicken array)
+        for _ in range(30):
+            w._add_chicken(s.head)                 # 30 chickens on the head => growth attempt 6+60=66
+        w._snake_eat(s)                            #   which the cap must clip to the snake's own max
+
+    eps = 1e-6
+    assert large.target_length > small.target_length              # (a) size gene's benefit is real
+    assert small.target_length <= small.phenotype.max_length + eps  # (b) neither exceeds its own max
+    assert large.target_length <= large.phenotype.max_length + eps
+    assert small.target_length < CFG.length_cap                    # (c) small caps BELOW the global 24
+
+
 def test_turn_changes_heading_by_delta():
     w = fresh(); a0 = w.heading; ph = w.snakes[0].phenotype
     w.move(3, 2, 0)                  # 2 = +turn

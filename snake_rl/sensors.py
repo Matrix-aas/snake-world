@@ -244,7 +244,9 @@ def _social(world, snake):
     rh = r.heading_vec()
     rh_fwd = float(np.clip(rh @ fwd, -1.0, 1.0))
     rh_left = float(np.clip(rh @ left, -1.0, 1.0))
-    size_ratio = float(np.clip(r.target_length / c.length_cap, 0.0, 1.0))
+    # normalize by the LARGEST reachable body (length_cap * size gene hi) so a big-size rival keeps
+    # granularity instead of clipping flat at 1.0 (bodies now grow to their per-snake max_length)
+    size_ratio = float(np.clip(r.target_length / (c.length_cap * c.gene_size_len_hi), 0.0, 1.0))
     # + relatedness (genome kinship -> guard/raid & cooperation), rival energy, rival repro_ready, rival sex
     rel_kin = relatedness(snake.genome, r.genome)
     r_energy = float(np.clip(r.energy / c.energy_max, 0.0, 1.0))

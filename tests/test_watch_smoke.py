@@ -3,7 +3,8 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import numpy as np
 from snake_rl.config import CFG
 from snake_rl.train import train
-from snake_rl.watch import rollout_once, run_headless, _step_world, _reseed_floor, _load_model
+from snake_rl.watch import (rollout_once, run_headless, _step_world, _reseed_floor, _load_model,
+                            _new_ecosystem)
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
 from stable_baselines3 import PPO
@@ -73,6 +74,23 @@ def test_run_headless_returns_ecosystem_metrics_dict(tmp_path):
     assert len(metrics["population"]) == 120
     for key in ("births", "kills", "starvations", "catch_rate", "dash_usage", "steps"):
         assert key in metrics
+
+
+def test_step_world_advances_each_ring_once_in_no_ego_world(tmp_path):
+    # Regression: in a no_ego viewer world, world.step drives EVERY live snake via opponent_fn, so
+    # _step_world must NOT also call controller.act for a positional slot -- that would roll the first
+    # live snake's frame ring TWICE (two identical newest frames -> corrupt velocity signal + skewed
+    # run_headless metrics). After a single step a fresh ring must hold exactly ONE populated frame.
+    model_path = tmp_path / "m.zip"
+    train(total_steps=256, n_envs=1, model_path=str(model_path), reset=True, seed=0)
+    _model, ctrl, _ = _new_ecosystem(str(model_path), seed=0)   # a SYNCED controller (rings actually roll)
+    w = generate_world(CFG, seed=11, size=(140.0, 140.0), n_snakes=3)   # live snakes to drive
+    w.no_ego = True
+    first = [s for s in w.snakes if s.alive][0]
+    _step_world(w, ctrl)
+    ring = ctrl.rings[first.id]
+    populated = sum(bool(np.any(row)) for row in ring)
+    assert populated == 1                                       # a double-roll would populate 2 frames
 
 
 def test_load_model_rejects_dim_mismatched_model(tmp_path):

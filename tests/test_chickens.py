@@ -15,10 +15,13 @@ def test_eat_removes_chicken_and_grows():
 
 
 def test_growth_capped():
-    w = World(CFG, seed=1, size=(60, 60)); w.target_length = CFG.length_cap - 0.1
+    # growth caps at the snake's OWN phenotype.max_length (size gene), not the global length_cap
+    w = World(CFG, seed=1, size=(60, 60))
+    cap = w.snakes[0].phenotype.max_length
+    w.target_length = cap - 0.1
     w.set_chickens([w.head.copy()])
     w.try_eat()
-    assert w.target_length <= CFG.length_cap
+    assert w.target_length <= cap + 1e-6
 
 
 # --- behavior FSM (peck / walk / flee + startle) ---

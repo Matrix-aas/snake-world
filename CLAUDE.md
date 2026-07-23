@@ -405,8 +405,11 @@ Every one of these cost real training runs (some cost more than one). Do not red
     break "mutual head-to-head ⇒ both die" (whoever moves second would hit an already-stale body).
     **(v3 extension:** `step` is now **`no_ego`-bifurcated** — the viewer branch drives EVERY snake via
     `opponent_fn` and reports no ego death, tolerating an empty live set; the training branch keeps the
-    live slot-0 gradient-ego. The two-phase order-independence is identical in both branches. The
-    training (`no_ego=False`) branch is byte-identical to v2.)
+    live slot-0 gradient-ego. The two-phase order-independence is identical in both branches. What's
+    preserved from v2 in the training (`no_ego=False`) branch is the **ego STEP control-flow** — the
+    move→resolve→phase-3 ordering and the slot-0 gradient-ego. Phase 3 itself is NOT byte-identical to
+    v2: aging, the genome/lineage plumbing, sex, and the new obs channels are added there for BOTH
+    branches.)
 14. **Corpses were food (`try_eat`) but UNSENSED** (no ray category, no smell field) — scavenging
     literally could not emerge, because nothing in the observation pointed a snake at a corpse.
     Fixed by adding an `is_corpse` ray one-hot + a corpse smell field (`OBS_DIM` 75→87), caught
