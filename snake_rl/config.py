@@ -210,7 +210,7 @@ def assert_invariants_over_genome(cfg: Config) -> None:
     """HARD gates that must hold for EVERY genome (spec §2.4): aiming precision at max size,
     raycast validity at max ray_range. Stamina-budget & self-collision are SOFT (single-strategy
     relics: own-body non-lethal, peck-hunting needs no dash) -- logged, never fatal."""
-    from .genome import resolve_phenotype, GENE_COUNT
+    from .genome import resolve_phenotype, GENE_COUNT, SPEED
     import numpy as _np
     # HARD 1: precision at the coarsest turn (max size gene)
     hi_turn = cfg.turn_deg * cfg.gene_size_turn_hi
@@ -219,13 +219,21 @@ def assert_invariants_over_genome(cfg: Config) -> None:
     # HARD 2: nearest-image raycast at the longest ray_range (max senses gene)
     assert cfg.gene_rayrange_hi + cfg.obstacle_radius_max + cfg.head_radius < cfg.world_size_min / 2, \
         "max ray_range too large for nearest-image raycast on the smallest world"
-    # SOFT: report worst-corner stamina budget & self-collision reachability
-    g_lo = _np.zeros(GENE_COUNT); g_hi = _np.ones(GENE_COUNT)
-    p_weak = resolve_phenotype(_np.array([0, 0, 0, 0, 0, 0, 0, 0, 0], float), cfg)  # slow, low stamina
+    # SOFT (log, never fail): stamina budget at the weakest (all-zero) genome -- slow, low stamina
+    p_weak = resolve_phenotype(_np.zeros(GENE_COUNT), cfg)
     budget = (p_weak.s_max / cfg.stamina_drain) * (p_weak.v_dash - cfg.v_flee)
     if budget < cfg.catch_slack_k * cfg.r_flee:
         log.info("gene box: weakest genome is ambush-only (dash budget %.1f < %.1f) -- expected, soft",
                  budget, cfg.catch_slack_k * cfg.r_flee)
+    # SOFT: self-collision reachability at the small-body + fast corner (short body, tight turn,
+    # wide dash circle). Own body is non-lethal solid-slide now (Pitfall 19), so an unreachable
+    # self-curl is fine -- log, never fail.
+    g_fast = _np.zeros(GENE_COUNT); g_fast[SPEED] = 1.0
+    p_fast = resolve_phenotype(g_fast, cfg)
+    turn_circ = 2 * math.pi * p_fast.v_snake / math.radians(p_fast.turn_deg)
+    if turn_circ >= p_fast.max_length:
+        log.info("gene box: small-fast genome can't curl onto itself (circ %.1f >= len %.1f) -- "
+                 "fine, own body non-lethal (Pitfall 19), soft", turn_circ, p_fast.max_length)
 
 
 CFG = Config()

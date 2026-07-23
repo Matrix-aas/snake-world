@@ -1,0 +1,5 @@
+#!/bin/bash
+# Thin launcher: run the project's fullscreen viewer with the shipped model.
+# ponytail: hardcoded repo path — this is a launcher for THIS Mac, not a distributable.
+cd /Users/matrix/WebstormProjects/snake-real-test || exit 1
+exec ./snake watch >/tmp/snakeworld.log 2>&1
