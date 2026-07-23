@@ -102,6 +102,13 @@ class SnakeEnv(gym.Env):
             repro_length_frac=lerp(b.repro_length_frac_easy, b.repro_length_frac),
         )
 
+    def _egg_lost_reward(self, eaten):
+        """cfg.reward_egg_lost (negative, DEFAULT 0.0) if the ego co-owns >=1 eaten egg, else 0.0.
+        `eaten` = world.step()["eaten_eggs"]: a list of frozenset(owner ids) for REAL eggs eaten this
+        step. Flat (not per-egg) -- guarding is what the penalty teaches; the count is incidental."""
+        ego_id = self.world.snakes[0].id
+        return self.cfg.reward_egg_lost if any(ego_id in owners for owners in eaten) else 0.0
+
     def _phi(self):
         _, d = self.world.nearest_chicken()
         d = min(d, self.cfg.ray_range)
@@ -156,6 +163,9 @@ class SnakeEnv(gym.Env):
         # or population-cap-dropped ego egg is absent from hatched_owners, so it pays nothing.
         n_repro_ego = sum(1 for owners in out["hatched_owners"] if ego_id in owners)
         reward += c.reward_repro * n_repro_ego
+        # egg-lost hook (Task 12, DEFAULT 0.0): an eaten ego-co-owned egg pays reward_egg_lost -- a
+        # post-competence guarding-sharpening knob, OFF for the discovery retrain (Pitfall-1 cousin).
+        reward += self._egg_lost_reward(out["eaten_eggs"])
         for sid, _cause in out["deaths_detailed"]:
             self._opp.reset_snake(sid)         # clear a dead snake's frame ring (no stale frames)
         if terminated:

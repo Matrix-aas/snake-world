@@ -22,7 +22,7 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False, ego_li
     ref = ((cfg.world_size_min + cfg.world_size_max) / 2) ** 2
     area_mult = (w.size[0] * w.size[1]) / ref if size is not None else 1.0
     n = int(np.clip(round(rng.integers(cfg.n_obstacles_min, cfg.n_obstacles_max + 1) * area_mult),
-                    cfg.n_obstacles_min, 60))
+                    cfg.n_obstacles_min, cfg.n_obstacles_max))
     pos, rad, kind = [], [], []
     clear = cfg.r_flee                                   # keep start area open
     attempts = 0

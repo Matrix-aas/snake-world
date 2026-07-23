@@ -17,6 +17,15 @@ def test_has_chicken_and_obstacles_in_range():
     assert (CFG.world_size_min <= w.size).all() and (w.size <= CFG.world_size_max).all()
 
 
+def test_obstacle_count_clamp_reaches_n_obstacles_max():
+    # Task 11 carry-forward: the obstacle-count clamp must cap at cfg.n_obstacles_max (64), not the
+    # old literal 60. A large world (area_mult >> 1) pushes the count past 60, so the clamp value is
+    # observable: RED if the clamp is still literal-60 (count pinned at 60, never reaches 61..64).
+    w = generate_world(CFG, seed=11, size=(560.0, 560.0))
+    assert len(w.obstacle_pos) <= CFG.n_obstacles_max
+    assert len(w.obstacle_pos) > 60
+
+
 def test_no_obstacle_on_snake_start():
     w = generate_world(CFG, seed=3)
     d = torus_dist(w.obstacle_pos, w.head, w.size)

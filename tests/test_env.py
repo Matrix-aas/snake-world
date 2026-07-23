@@ -26,6 +26,29 @@ def test_env_obs_space_matches_layout_for_extreme_genomes():
         assert env.observation_space.contains(obs)
 
 
+def test_reset_randomizes_genomes_across_the_founder_population():
+    # Domain randomization (spec §8): every founder snake AND every arrival egg gets a freshly
+    # sampled genome, so the brain learns to read the whole gene box. arrivals=True => snakes holds
+    # the one live gradient-ego; the other founders are PENDING EGGS -- vary across both.
+    env = SnakeEnv(seed=4)
+    env.reset()
+    genomes = [s.genome for s in env.world.snakes]
+    if len(env.world.eggs.get("genome", [])):
+        genomes += list(env.world.eggs["genome"])
+    assert len({tuple(np.round(g, 4)) for g in genomes}) >= 2
+
+
+def test_egg_lost_reward_only_for_ego_owned_eggs():
+    import dataclasses
+    env = SnakeEnv(seed=4)
+    env.reset()
+    env.cfg = dataclasses.replace(env.cfg, reward_egg_lost=-4.0)   # Config is frozen
+    ego = env.world.snakes[0]
+    assert env._egg_lost_reward([frozenset({ego.id, 123})]) == -4.0   # ego co-owns -> penalized
+    assert env._egg_lost_reward([frozenset({999, 123})]) == 0.0       # foreign egg -> nothing
+    assert env._egg_lost_reward([]) == 0.0                            # nothing eaten -> nothing
+
+
 def test_reset_seed_deterministic():
     o1, _ = SnakeEnv(seed=7).reset(seed=7)
     o2, _ = SnakeEnv(seed=7).reset(seed=7)
