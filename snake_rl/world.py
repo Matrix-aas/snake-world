@@ -758,24 +758,28 @@ class World:
         return body
 
     def _other_hazard(self, s):
-        pts, rads = [], []
+        """Rival heads + full bodies (no neck-skip) as (pts, rads, motion). `motion` carries each
+        point's owning-rival speed so sensors can build a per-ray target-motion channel after the
+        flatten (per-rival identity is otherwise lost); _death_cause ignores it."""
+        pts, rads, mot = [], [], []
         for o in self.snakes:
             if o is s or not o.alive:
                 continue
-            pts.append(o.head_uw); rads.append(self.cfg.head_radius)   # head (head_radius)
+            pts.append(o.head_uw); rads.append(self.cfg.head_radius); mot.append(o.speed)   # head
             body = self._cached_render_body(o)[1:]     # dense body, NO neck skip; skip idx-0 head (added above)
             if len(body):
                 pts.extend(body); rads.extend([self.cfg.body_radius] * len(body))
+                mot.extend([o.speed] * len(body))
         if not pts:
-            return np.zeros((0, 2)), np.zeros((0,))
-        return np.array(pts), np.array(rads)
+            return np.zeros((0, 2)), np.zeros((0,)), np.zeros((0,))
+        return np.array(pts), np.array(rads), np.array(mot)
 
     def _death_cause(self, s):
         """Pure — returns 'snake'|None for s vs post-move state. No mutation. Obstacles and the snake's
         OWN body are now solid (slid along in _move_snake), never lethal; only a RIVAL's body/head
         kills (cut-off), swept over s._prev_head_uw -> s.head_uw (the slid path)."""
         c = self.cfg; hr = c.head_radius
-        opts, orads = self._other_hazard(s)
+        opts, orads, _ = self._other_hazard(s)
         if len(opts) and segment_circle_hit(
                 s._prev_head_uw, s.head_uw, opts, orads + hr, self.size).any():
             return "snake"

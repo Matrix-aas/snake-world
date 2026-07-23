@@ -2,10 +2,28 @@ import numpy as np
 from gymnasium.utils.env_checker import check_env
 from snake_rl.config import CFG
 from snake_rl.env import SnakeEnv
+from snake_rl.sensors import observe, OBS_DIM
 
 
 def test_gymnasium_check_env():
     check_env(SnakeEnv(seed=0), skip_render_check=True)
+
+
+def test_env_obs_space_matches_layout_for_extreme_genomes():
+    env = SnakeEnv(seed=2)
+    assert env.observation_space.shape[0] == OBS_DIM * env.cfg.frame_stack or \
+           env.observation_space.shape[0] == OBS_DIM  # single-frame space; framestack is external
+    from snake_rl import genome as gm
+    env.reset()                      # world is None until reset() (review C3)
+    w = env.world
+    for gval in (0.0, 1.0):
+        g = np.full(gm.GENE_COUNT, gval, np.float32)
+        s = w.snakes[0]
+        w.snakes[0] = w._make_snake(s.head, 0.0, genome=g, sex=0, lineage=1, id=s.id,
+                                    color_seed=1, energy=env.cfg.energy_max,
+                                    target_length=env.cfg.start_length, rng=w.rng)
+        obs = observe(w, w.snakes[0]).astype(np.float32)
+        assert env.observation_space.contains(obs)
 
 
 def test_reset_seed_deterministic():

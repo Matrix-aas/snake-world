@@ -239,7 +239,7 @@ def test_chicken_arrives_from_sky_before_it_is_huntable_and_sensed():
     assert len(w.arriving["head"]) == 1                       # a stable landing heading rides along (Pitfall 17)
     landing_head = float(w.arriving["head"][0])
     assert w.try_eat()[0] == 0                                # can't eat a chicken still in the air
-    is_chicken = observe(w)[:88].reshape(11, 8)[:, 2]        # per-ray is_chicken one-hot
+    is_chicken = observe(w)[:99].reshape(11, 9)[:, 2]        # per-ray is_chicken one-hot (9 feats/ray)
     assert not is_chicken.any()                               # ...and no vision ray reports it
     for _ in range(CFG.chicken_arrive_steps):                 # let it fall all the way down
         w._land_arrivals()

@@ -10,45 +10,56 @@ from .selfplay import OpponentController
 
 
 def _make_observation_space(cfg):
-    """Bounds for the 113-float layout (sensors.observe), every signed/scaled channel enumerated
+    """Bounds for the 143-float layout (sensors.observe), every signed/scaled channel enumerated
     by index so a bound mistake fails `observation_space.contains` instead of silently clipping:
-      rays        0:88  11 x [dist, is_obstacle, is_chicken, is_self, is_other_body, is_egg,
-                              is_corpse, obstacle_clearance] -> [0,1]
-      social     88:95  [has_rival, rel_pos_fwd, rel_pos_left, rival_heading_fwd,
-                          rival_heading_left, size_ratio, rival_is_dashing]
-      egg        95:99  [has_egg, rel_pos_fwd, rel_pos_left, is_mine]
-      smell      99:108 [chicken_intensity, chicken_grad_fwd, chicken_grad_left,
+      rays        0:99  11 x [dist, is_obstacle, is_chicken, is_self, is_other_body, is_egg,
+                              is_corpse, obstacle_clearance, target_motion] -> [0,1]
+      social     99:110 [has_rival, rel_pos_fwd, rel_pos_left, rival_heading_fwd, rival_heading_left,
+                          size_ratio, rival_is_dashing, relatedness, rival_energy, rival_repro_ready,
+                          rival_sex]
+      egg       110:114 [has_egg, rel_pos_fwd, rel_pos_left, is_mine]
+      smell     114:123 [chicken_intensity, chicken_grad_fwd, chicken_grad_left,
                           snake_intensity, snake_grad_fwd, snake_grad_left,
                           corpse_intensity, corpse_grad_fwd, corpse_grad_left]
-      proprio   108:113 [energy, length, stamina, repro_ready, speed] -> [0,1]
+      vibration 123:126 [intensity, grad_fwd, grad_left]
+      proprio   126:143 [energy, length, stamina, repro_ready, speed, sex, age_frac, stun_frac, genome x9] -> [0,1]
 
-    chicken/snake bounds are provably safe: `world.maybe_spawn` never lets the live chicken count
-    exceed `chicken_ceiling`, and hatching refuses once `n_alive >= n_max` (world.py), so those raw
-    smell sums can never exceed their population ceiling. Corpses have NO such cap in world.py --
-    they persist until eaten, so an uneaten pile could in principle exceed any population-derived
-    bound. `sensors.smell` clips the corpse field to `chicken_ceiling` (matching magnitude/style of
-    the other two) so this bound holds unconditionally rather than just "usually".
+    chicken counts are capped by `world.maybe_spawn` (<= chicken_ceiling) and rivals by hatching's
+    n_max refusal, but `sensors.smell` scales every field by a per-genome smell_reach (up to 1.4x) and
+    then CLIPS all three fields to `chicken_ceiling` -- so each smell bound is `chicken_ceiling` to
+    exactly match the clip (the snake channels are widened from n_max, which a dense high-reach cluster
+    could exceed). Corpses have no population cap at all (persist until eaten) -- same clip covers them.
+    Vibration is a speed-weighted field over rivals + fleeing chickens, so its natural bound is the two
+    populations combined: `n_max + chicken_ceiling`, derived from cfg (never a literal).
     """
-    assert OBS_DIM == 113, "observation_space layout is hand-enumerated for OBS_DIM=113"
+    assert OBS_DIM == 143, "observation_space layout is hand-enumerated for OBS_DIM=143"
     low = np.zeros(OBS_DIM, np.float32)
-    high = np.ones(OBS_DIM, np.float32)                          # default [0,1]: rays (incl. clearance),
-                                                                   # one-hots, proprio, presence+ratio bits
-    SOC = 88
+    high = np.ones(OBS_DIM, np.float32)                          # default [0,1]: rays (incl. clearance +
+                                                                   # motion), one-hots, proprio, presence bits
+    SOC = 99
     low[SOC + 1:SOC + 5] = -1.0; high[SOC + 1:SOC + 5] = 1.0      # rel_pos_fwd/left, rival_heading_fwd/left
-    EGG = 95
+                                                                   # SOC+5..+10 (size,dash,relatedness,energy,
+                                                                   # repro_ready,sex) stay at the [0,1] default
+    EGG = 110
     low[EGG + 1:EGG + 3] = -1.0; high[EGG + 1:EGG + 3] = 1.0      # rel_pos_fwd/left
-    SM = 99
-    ceil, nmax = float(cfg.chicken_ceiling), float(cfg.n_max)
-    low[SM] = 0.0;     high[SM] = ceil                            # chicken_intensity
+    SM = 114
+    ceil = float(cfg.chicken_ceiling)                            # every smell channel: clipped to this in sensors
+    low[SM] = 0.0;       high[SM] = ceil                          # chicken_intensity
     low[SM + 1] = -ceil; high[SM + 1] = ceil                      # chicken_grad_fwd
     low[SM + 2] = -ceil; high[SM + 2] = ceil                      # chicken_grad_left
-    low[SM + 3] = 0.0;   high[SM + 3] = nmax                      # snake_intensity
-    low[SM + 4] = -nmax; high[SM + 4] = nmax                      # snake_grad_fwd
-    low[SM + 5] = -nmax; high[SM + 5] = nmax                      # snake_grad_left
-    low[SM + 6] = 0.0;   high[SM + 6] = ceil                      # corpse_intensity (clipped to ceil, see above)
+    low[SM + 3] = 0.0;   high[SM + 3] = ceil                      # snake_intensity (WIDENED n_max->ceil = clip)
+    low[SM + 4] = -ceil; high[SM + 4] = ceil                      # snake_grad_fwd  (WIDENED)
+    low[SM + 5] = -ceil; high[SM + 5] = ceil                      # snake_grad_left (WIDENED)
+    low[SM + 6] = 0.0;   high[SM + 6] = ceil                      # corpse_intensity
     low[SM + 7] = -ceil; high[SM + 7] = ceil                      # corpse_grad_fwd
     low[SM + 8] = -ceil; high[SM + 8] = ceil                      # corpse_grad_left
-    assert SM + 9 == 108 and 108 + 5 == OBS_DIM                   # proprio 108:113 stays at the [0,1] default
+    VIB = 123
+    vceil = float(cfg.n_max + cfg.chicken_ceiling)               # derived from cfg (review I2), NOT a literal
+    low[VIB] = 0.0;        high[VIB] = vceil                      # vibration_intensity
+    low[VIB + 1] = -vceil; high[VIB + 1] = vceil                  # vibration_grad_fwd
+    low[VIB + 2] = -vceil; high[VIB + 2] = vceil                  # vibration_grad_left
+    PROP = 126
+    assert VIB + 3 == PROP and PROP + 17 == OBS_DIM              # proprio 126:143 stays [0,1] (incl. genome tail)
     return spaces.Box(low, high, (OBS_DIM,), np.float32)
 
 
