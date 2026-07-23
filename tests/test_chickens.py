@@ -7,7 +7,7 @@ def test_eat_removes_chicken_and_grows():
     w = World(CFG, seed=1, size=(60, 60)); w.energy = 50.0
     w.set_chickens([w.head + [0.5, 0.0]])             # within eat_radius (2.0)
     L0 = w.target_length
-    n = w.try_eat()
+    n, _ = w.try_eat()
     assert n == 1
     assert len(w.chicken_pos) == 0 and len(w.chicken_id) == 0
     assert w.target_length == min(CFG.length_cap, L0 + CFG.grow_per_chicken)
@@ -238,14 +238,14 @@ def test_chicken_arrives_from_sky_before_it_is_huntable_and_sensed():
     assert len(w.chicken_pos) == 0 and len(w.arriving["pos"]) == 1   # in flight, not a real chicken yet
     assert len(w.arriving["head"]) == 1                       # a stable landing heading rides along (Pitfall 17)
     landing_head = float(w.arriving["head"][0])
-    assert w.try_eat() == 0                                   # can't eat a chicken still in the air
+    assert w.try_eat()[0] == 0                                # can't eat a chicken still in the air
     is_chicken = observe(w)[:88].reshape(11, 8)[:, 2]        # per-ray is_chicken one-hot
     assert not is_chicken.any()                               # ...and no vision ray reports it
     for _ in range(CFG.chicken_arrive_steps):                 # let it fall all the way down
         w._land_arrivals()
     assert len(w.arriving["pos"]) == 0 and len(w.chicken_pos) == 1   # landed -> a real chicken
     assert float(w.chicken_dir[0]) == landing_head            # landed hen keeps its in-flight facing
-    assert w.try_eat() == 1                                   # now catchable on the snake's doorstep
+    assert w.try_eat()[0] == 1                                # now catchable on the snake's doorstep
 
 
 def test_nearest_chicken():

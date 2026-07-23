@@ -209,8 +209,9 @@ def test_ray_detects_egg():
 def test_repro_ready_toggles_on_three_way_gate():
     w = straight_world()
     s = w.snakes[0]
+    gate = CFG.repro_length_frac * s.phenotype.max_length   # size-RELATIVE length gate (Task 8)
     s.energy = CFG.repro_energy_frac * CFG.energy_max + 1
-    s.target_length = CFG.repro_length_min + 1
+    s.target_length = gate + 1.0
     s.repro_cooldown = 0
     assert observe(w)[111] == 1.0                       # all three gates pass
     s.repro_cooldown = 5
@@ -219,7 +220,7 @@ def test_repro_ready_toggles_on_three_way_gate():
     s.energy = 0.0
     assert observe(w)[111] == 0.0                        # energy gate blocks it
     s.energy = CFG.repro_energy_frac * CFG.energy_max + 1
-    s.target_length = CFG.repro_length_min - 1
+    s.target_length = gate - 1.0
     assert observe(w)[111] == 0.0                        # length gate blocks it
 
 

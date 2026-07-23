@@ -82,10 +82,13 @@ class SnakeEnv(gym.Env):
             b,
             dash_min_stamina=lerp(b.dash_min_stamina_easy, b.dash_min_stamina),
             stamina_regen=lerp(b.stamina_regen_easy, b.stamina_regen),
-            # mating curriculum: easy to discover early (close/instant/short), tightens as h -> 1
+            # mating curriculum: easy to discover early (close/instant/short), tightens as h -> 1.
+            # The length gate is now a size-RELATIVE fraction (of each snake's own max_length); the
+            # swept frac is read IDENTICALLY by world._resolve_mating and sensors._repro_ready, so the
+            # observed repro_ready bit and the real eligibility ramp together (review I1).
             r_mate=lerp(b.r_mate_easy, b.r_mate),
             mate_steps=int(round(lerp(b.mate_steps_easy, b.mate_steps))),
-            repro_length_min=lerp(b.repro_length_min_easy, b.repro_length_min),
+            repro_length_frac=lerp(b.repro_length_frac_easy, b.repro_length_frac),
         )
 
     def _phi(self):

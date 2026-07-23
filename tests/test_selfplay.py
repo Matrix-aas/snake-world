@@ -5,6 +5,7 @@ from snake_rl.sensors import OBS_DIM
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
 from snake_rl.world import torus_dist
+from snake_rl.genome import GENE_COUNT
 
 
 def _numpy_state_dict(ctrl):
@@ -110,7 +111,8 @@ def test_repro_reward_only_on_ego_hatch():
     def run_hatch(owner):
         env, w = base_env()
         pos = far_point(w)
-        w.eggs = {"pos": pos[None].copy(), "timer": np.array([1.0]), "owner": np.array([owner])}
+        w.eggs = {"pos": pos[None].copy(), "timer": np.array([1.0]), "owner": np.array([owner]),
+                  "genome": np.full((1, GENE_COUNT), 0.5, np.float32), "lineage": np.array([0])}
         return env.step([1, 1, 0])[1]
 
     r_ego = run_hatch([0, 1])                          # ego (id 0) owned egg hatches -> pays reward_repro
@@ -126,7 +128,8 @@ def test_repro_reward_only_on_ego_hatch():
                           target_length=CFG.start_length, stamina=CFG.s_max, energy=CFG.energy_max,
                           _prev_head_uw=oh.copy(), id=1))
     w.eggs = {"pos": w.snakes[1].head.copy()[None],   # sits on opponent 1 -> foreign -> eaten next step
-              "timer": np.array([45.0]), "owner": np.array([[0, 99]])}
+              "timer": np.array([45.0]), "owner": np.array([[0, 99]]),
+              "genome": np.full((1, GENE_COUNT), 0.5, np.float32), "lineage": np.array([0])}
     r_raided = env.step([1, 1, 0])[1]
     env, _ = base_env()
     r_noegg = env.step([1, 1, 0])[1]

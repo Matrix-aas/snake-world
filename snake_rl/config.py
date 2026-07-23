@@ -89,11 +89,11 @@ class Config:
     # reproduction / eggs / corpses
     repro_energy_frac: float = 0.7   # min energy fraction to qualify for mating
     # v2 from-scratch training endpoints (ecosystem-sustain tuning; v1 trained tighter --
-    # repro_length_min 10, r_mate 4, mate_steps 4, repro_cost 30, repro_cooldown 120 -- then eased
-    # these at runtime; v2 trains on the eased values directly, see CLAUDE.md history). NOTE:
-    # repro_length_min IS observed (sensors._repro_ready, Pitfall 12) -- do NOT ease it past the
-    # curriculum's swept [repro_length_min_easy, repro_length_min] range without a retrain.
-    repro_length_min: float = 8.0    # min body length to qualify for mating
+    # r_mate 4, mate_steps 4, repro_cost 30, repro_cooldown 120 -- then eased these at runtime; v2
+    # trains on the eased values directly, see CLAUDE.md history). Task 8 NOTE: the length gate is now
+    # the size-RELATIVE, curriculum-swept repro_length_frac (below) -- THAT is the observed constant
+    # (sensors._repro_ready, Pitfall 12); repro_length_min/_easy are LEGACY (no gate reads them).
+    repro_length_min: float = 8.0    # LEGACY absolute gate (superseded by size-relative repro_length_frac)
     r_mate: float = 7.0              # mating distance
     mate_steps: int = 2              # steps two qualified snakes must hold mating distance
     repro_cost: float = 18.0         # energy spent by each parent on a successful mating
@@ -107,7 +107,7 @@ class Config:
     # so reproduction is easy to DISCOVER early, then tightens as hardness ramps to 1.0)
     r_mate_easy: float = 12.0
     mate_steps_easy: int = 1
-    repro_length_min_easy: float = 6.0
+    repro_length_min_easy: float = 6.0   # LEGACY (see repro_length_min; curriculum now sweeps repro_length_frac_easy)
     # sensing
     n_rays: int = 9
     n_fwd_rays: int = 2              # extra forward rays; RAY_COUNT = n_rays + n_fwd_rays = 11
@@ -149,7 +149,10 @@ class Config:
     # --- evolution / reproduction / aging ---
     mutation_sigma: float = 0.05
     lifespan_jitter: float = 0.15        # +/- fraction on max_lifespan at birth
-    repro_length_frac: float = 0.55      # mating length gate = frac * own max_length
+    repro_length_frac: float = 0.55      # HARD mating length gate = frac * own max_length (size-relative)
+    repro_length_frac_easy: float = 0.4  # EASY warmup gate: set_hardness sweeps frac_easy->frac as h 0->1
+                                         # (replaces the old absolute repro_length_min sweep; observed via
+                                         # sensors._repro_ready, so both gate sites read the swept frac)
     reward_egg_lost: float = 0.0         # DEFAULT OFF for the discovery retrain (Pitfall-1 cousin)
 
     @property

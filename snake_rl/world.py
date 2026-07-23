@@ -147,8 +147,14 @@ class World:
         self.obstacle_pos = np.zeros((0, 2)); self.obstacle_r = np.zeros((0,))
         self.obstacle_kind = np.zeros((0,), dtype=int)   # 0=rock,1=tree (render only)
         self.corpses = {"pos": np.zeros((0, 2)), "food": np.zeros((0,))}
-        self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int)}
-        self._mate_streak = {}
+        # 5 arrays kept in LOCKSTEP everywhere they're created/filtered (Pitfall 17): pos/timer/owner
+        # plus the CHILD genome (crossover+mutation, computed at LAY time) and its maternal lineage id.
+        # Every create/filter site (_lay_egg, _snake_eat, _hatch_eggs) masks all five together.
+        from .genome import GENE_COUNT
+        self.eggs = {"pos": np.zeros((0, 2)), "timer": np.zeros((0,)), "owner": np.zeros((0, 2), int),
+                     "genome": np.zeros((0, GENE_COUNT), np.float32), "lineage": np.zeros((0,), int)}
+        self._next_lineage = 1000    # arrival-founder maternal-line ids (offset from worldgen founders 0..n);
+        self._mate_streak = {}       # nothing reads lineage for LOGIC yet -- just a distinct tag per line
         # bumped whenever ANY snake's body geometry changes (move/grow); keys the per-snake dense-body
         # cache reused across observers within a step (see _cached_render_body). Move bumps it N times
         # in phase 1, then it's stable through phase-2 death checks and (post-eat) through observe.
@@ -522,9 +528,12 @@ class World:
 
     def _snake_eat(self, s):
         """Eat any chicken OR corpse OR foreign egg within eat_radius of s.head (nearest-image);
-        each item counts once into n, growth/energy applied to s, egg ownership keyed on s.id."""
+        each item counts once into n, growth/energy applied to s, egg ownership keyed on s.id.
+        Returns (n, eaten_eggs) where eaten_eggs is a list of frozenset(owner ids) for each REAL
+        (owner>=0) egg consumed this call -- the return channel that feeds parents an 'egg lost' signal."""
         n = 0
         energy_gain = 0.0
+        eaten_eggs = []
         if len(self.chicken_pos):
             d = torus_dist(self.chicken_pos, s.head, self.size)
             eaten = d <= self.cfg.eat_radius
@@ -560,10 +569,14 @@ class World:
             eaten = foreign & (d <= self.cfg.eat_radius)
             ne = int(eaten.sum())
             if ne:
+                for row in self.eggs["owner"][eaten]:        # only owner>=0 eggs reach here (foreign gate)
+                    eaten_eggs.append(frozenset(int(x) for x in row))
                 keep = ~eaten
                 self.eggs["pos"] = self.eggs["pos"][keep]
                 self.eggs["timer"] = self.eggs["timer"][keep]
                 self.eggs["owner"] = self.eggs["owner"][keep]
+                self.eggs["genome"] = self.eggs["genome"][keep]     # lockstep (Pitfall 17)
+                self.eggs["lineage"] = self.eggs["lineage"][keep]
                 n += ne
                 energy_gain += ne * self.cfg.egg_food
         if n:
@@ -571,19 +584,22 @@ class World:
                                    s.target_length + n * self.cfg.grow_per_chicken)
             s.energy = min(self.cfg.energy_max, s.energy + energy_gain)
             self._body_gen += 1                          # growth changes body length -> invalidate cache
-        return n
+        return n, eaten_eggs
 
     def try_eat(self):
-        """Every live snake eats independently; returns the EGO's count from this single pass
-        (never re-runs _snake_eat on the ego, which would double-consume already-cleared arrays)."""
+        """Every live snake eats independently; returns (ego_count, eaten_eggs) from this single pass
+        (never re-runs _snake_eat on the ego, which would double-consume already-cleared arrays).
+        eaten_eggs aggregates every REAL egg consumed by ANY snake this step (owner-set per egg)."""
         ate_ego = 0
+        eaten_eggs = []
         for s in self.snakes:
             if not s.alive:
                 continue
-            n = self._snake_eat(s)
+            n, eggs = self._snake_eat(s)
+            eaten_eggs.extend(eggs)
             if s is self.snakes[0]:
                 ate_ego = n
-        return ate_ego
+        return ate_ego, eaten_eggs
 
     def decay_energy(self):
         for s in self.snakes:
@@ -631,21 +647,28 @@ class World:
         self._add_chicken(self._free_point(self.cfg.chicken_radius), arriving=arriving)
 
     # --- reproduction ---
-    def _lay_egg(self, pos, id_a, id_b, timer=None):
+    def _lay_egg(self, pos, id_a, id_b, genome, lineage, timer=None):
         e = self.eggs
         e["pos"] = np.vstack([e["pos"], pos[None]]) if len(e["pos"]) else pos[None].copy()
         e["timer"] = np.append(e["timer"], self.cfg.egg_timer if timer is None else timer)
         row = np.array([[id_a, id_b]])
         e["owner"] = np.vstack([e["owner"], row]) if len(e["owner"]) else row
+        g = np.asarray(genome, np.float32)[None]                          # child genome, carried to hatch
+        e["genome"] = np.vstack([e["genome"], g]) if len(e["genome"]) else g
+        e["lineage"] = np.append(e["lineage"], int(lineage))
 
     def spawn_egg(self, pos, timer=None):
         """Lay a GUARANTEED arrival egg (owner -1 = nobody's): every new NON-ego snake ARRIVES via
         one of these instead of popping in (Goal 1) -- used by worldgen for opponents and by the
         viewer reseed floor. Reuses the repro egg/hatch machinery, but an owner -1 makes it
         uneatable (_snake_eat) and n_max-cap-exempt (_hatch_eggs), and it pays no repro reward /
-        counts as no 'birth' (excluded from hatched_owners). It still renders + hatches (shell
+        counts as no 'birth' (excluded from hatched_owners). Carries a freshly-sampled FOUNDER genome
+        + a new lineage (it starts its own maternal line). It still renders + hatches (shell
         crack) exactly like a normal egg."""
-        self._lay_egg(np.asarray(pos, float), -1, -1, timer=timer)
+        from .genome import sample_genome
+        lin = self._next_lineage; self._next_lineage += 1
+        self._lay_egg(np.asarray(pos, float), -1, -1,
+                      genome=sample_genome(self.rng), lineage=lin, timer=timer)
 
     def _hatch_eggs(self):
         """Returns owner-sets (frozenset of parent ids) of eggs that produced a hatchling this step."""
@@ -665,12 +688,13 @@ class World:
                 pos = e["pos"][i].copy()
                 sid = self._next_snake_id
                 self._next_snake_id += 1
-                # M1 (Task 3): eggs don't carry a genome yet (Task 8) -- a hatchling samples a fresh
-                # one + random sex; lineage = its own id (always fresh, no separate counter needed).
-                from .genome import sample_genome
+                # Task 8: the hatchling INHERITS the egg's carried genome + maternal lineage (a repro
+                # egg carries the crossover child; an arrival egg a freshly-sampled founder). Sex is a
+                # fresh random 0/1 -> a mixed population from any single egg.
                 self.snakes.append(self._make_snake(
                     wrap(pos, self.size), float(self.rng.uniform(0, 2 * np.pi)),
-                    genome=sample_genome(self.rng), sex=int(self.rng.integers(0, 2)), lineage=sid,
+                    genome=e["genome"][i].copy(), sex=int(self.rng.integers(0, 2)),
+                    lineage=int(e["lineage"][i]),
                     id=sid, color_seed=sid, energy=c.hatch_energy_frac * c.energy_max,
                     target_length=c.start_length, rng=self.rng,
                 ))
@@ -679,6 +703,7 @@ class World:
                     hatched_owners.append(frozenset(int(x) for x in e["owner"][i]))
             keep = ~hatch
             e["pos"] = e["pos"][keep]; e["timer"] = e["timer"][keep]; e["owner"] = e["owner"][keep]
+            e["genome"] = e["genome"][keep]; e["lineage"] = e["lineage"][keep]     # lockstep (Pitfall 17)
         return hatched_owners
 
     def _resolve_mating(self):
@@ -692,17 +717,24 @@ class World:
             for j in range(i + 1, len(live)):
                 a, b = live[i], live[j]
                 key = frozenset((a.id, b.id)); seen.add(key)
+                # length gate is size-RELATIVE (fraction of each snake's OWN max_length, swept by the
+                # curriculum as c.repro_length_frac) -- mirrors sensors._repro_ready exactly (review I1).
                 ready = (a.energy > c.repro_energy_frac * c.energy_max and
                          b.energy > c.repro_energy_frac * c.energy_max and
-                         a.target_length > c.repro_length_min and b.target_length > c.repro_length_min and
+                         a.target_length > c.repro_length_frac * a.phenotype.max_length and
+                         b.target_length > c.repro_length_frac * b.phenotype.max_length and
                          a.repro_cooldown == 0 and b.repro_cooldown == 0 and
                          a.sex != b.sex)
                 close = torus_dist(a.head_uw[None], b.head_uw, self.size)[0] <= c.r_mate
                 if ready and close:
                     self._mate_streak[key] = self._mate_streak.get(key, 0) + 1
                     if self._mate_streak[key] >= c.mate_steps:
+                        from .genome import crossover, mutate
+                        female, male = (a, b) if a.sex == 0 else (b, a)   # the FEMALE lays (maternal line)
+                        child = mutate(crossover(female.genome, male.genome, self.rng),
+                                       self.rng, c.mutation_sigma)
                         mid = wrap(a.head_uw + torus_delta(b.head_uw, a.head_uw, self.size) / 2, self.size)
-                        self._lay_egg(mid, a.id, b.id)
+                        self._lay_egg(mid, female.id, male.id, genome=child, lineage=female.lineage)
                         a.energy -= c.repro_cost; b.energy -= c.repro_cost
                         a.repro_cooldown = c.repro_cooldown; b.repro_cooldown = c.repro_cooldown
                         self._mate_streak[key] = 0
@@ -789,7 +821,7 @@ class World:
         # phase 3: chickens, eat, energy decay, starvation, spawn, mating, hatching (every live snake)
         self._land_arrivals()                 # sky-dropped chickens that reached the ground become real
         self.update_chickens()
-        ate = self.try_eat()
+        ate, eaten_eggs = self.try_eat()      # eaten_eggs: owner-sets of REAL eggs consumed this step
         self.decay_energy()
         for s in self.snakes:
             if not s.alive:
@@ -808,7 +840,8 @@ class World:
         hatched_owners = self._hatch_eggs()
         self._prune_dead()
         return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths,
-                "deaths_detailed": deaths_detailed, "hatched_owners": hatched_owners}
+                "deaths_detailed": deaths_detailed, "hatched_owners": hatched_owners,
+                "eaten_eggs": eaten_eggs}      # owner-sets of REAL eggs eaten this step (env consumes in Task 12)
 
 
 def _ego_prop(name):

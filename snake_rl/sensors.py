@@ -220,8 +220,12 @@ def _egg_channel(world, snake):
 
 
 def _repro_ready(cfg, snake):
+    # length gate is size-RELATIVE: a fraction (cfg.repro_length_frac, curriculum-swept) of this
+    # snake's OWN max_length -> a small genome qualifies at its own full length, not an absolute bar.
+    # Reads the SAME cfg field the real mating gate does (world._resolve_mating), so the observed
+    # repro_ready bit and actual eligibility stay in lockstep through the curriculum (review I1).
     return 1.0 if (snake.energy > cfg.repro_energy_frac * cfg.energy_max and
-                    snake.target_length > cfg.repro_length_min and
+                    snake.target_length > cfg.repro_length_frac * snake.phenotype.max_length and
                     snake.repro_cooldown == 0) else 0.0
 
 

@@ -2,6 +2,7 @@ import numpy as np
 from snake_rl.config import CFG
 from snake_rl.world import World, Snake
 from snake_rl.worldgen import generate_world
+from snake_rl.genome import GENE_COUNT
 
 
 def test_world_has_snake_list_and_ego_proxies():
@@ -75,7 +76,7 @@ def test_dead_snake_becomes_corpse_and_is_edible():
     # move ego onto the corpse -> eats it (one item), energy up, corpse gone
     w.snakes[0].energy = 10.0
     w.snakes[0].head = w.corpses["pos"][0].copy()
-    n = w.try_eat()
+    n, _ = w.try_eat()
     assert n == 1 and w.corpses["pos"].shape == (0, 2) and w.snakes[0].energy > 10.0
 
 
@@ -116,11 +117,11 @@ def test_all_snakes_eat_and_decay_and_ego_count():
     w.set_chickens([])                 # set_chickens resets ALL parallel chicken arrays (incl. FSM state)
     opp = w.snakes[1]; opp.energy=10.0
     w.set_chickens([opp.head])         # one chicken on the opponent's head
-    assert w.try_eat() == 0            # ego ate nothing this call...
+    assert w.try_eat()[0] == 0         # ego ate nothing this call...
     assert opp.energy > 10.0           # ...but the opponent did
     # ego count is returned (place a chicken on the ego head)
     ego=w.snakes[0]; w.set_chickens([ego.head])
-    assert w.try_eat() == 1
+    assert w.try_eat()[0] == 1
     # energy_decay is per-snake now (Task 4: hunger reads phenotype, not the global CFG)
     e=opp.energy; w.decay_energy(); assert opp.energy == max(0.0, e-opp.phenotype.energy_decay)
 
@@ -151,7 +152,8 @@ def test_hatched_owners_reported_and_cap_drops_pay_nothing():
     from snake_rl.worldgen import generate_world
     # below n_max: a timer-expired egg hatches into a new snake, owner-set reported
     w = generate_world(CFG, seed=14, size=(140.0, 140.0), n_snakes=3)
-    w.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[0, 1]])}
+    w.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[0, 1]]),
+              "genome": np.full((1, GENE_COUNT), 0.5, np.float32), "lineage": np.array([0])}
     n0 = len(w.snakes)
     owners = w._hatch_eggs()
     assert len(w.snakes) == n0 + 1
@@ -159,7 +161,8 @@ def test_hatched_owners_reported_and_cap_drops_pay_nothing():
     # at n_max: the egg is still consumed, but produces no hatchling -> its owner-set pays nothing
     w2 = generate_world(CFG, seed=15, size=(150.0, 150.0), n_snakes=CFG.n_max)
     assert len(w2.snakes) == CFG.n_max
-    w2.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[2, 3]])}
+    w2.eggs = {"pos": np.array([[60.0, 60.0]]), "timer": np.array([1.0]), "owner": np.array([[2, 3]]),
+               "genome": np.full((1, GENE_COUNT), 0.5, np.float32), "lineage": np.array([0])}
     owners2 = w2._hatch_eggs()
     assert len(w2.snakes) == CFG.n_max          # no hatchling: population stays capped
     assert w2.eggs["pos"].shape[0] == 0         # egg consumed regardless
