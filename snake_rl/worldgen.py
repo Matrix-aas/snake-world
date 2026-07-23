@@ -4,12 +4,17 @@ from .world import World, wrap, torus_dist
 from .genome import sample_genome
 
 
-def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False):
+def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False, ego_live=True):
     """`arrivals=True` (viewer / training world): non-ego snakes ARRIVE via a guaranteed egg that
     hatches a few steps in, and runtime chickens DROP FROM THE SKY (world.chicken_sky), rather than
-    popping in (Goals 1 & 2). The ego (snake 0) is ALWAYS a live snake from step 0 -- SnakeEnv drives
-    it and can't steer an inert egg. `arrivals=False` (default) keeps the plain instant spawn for unit
-    fixtures. Initial chickens land instantly either way, so episode-start food is available at once."""
+    popping in (Goals 1 & 2). `arrivals=False` (default) keeps the plain instant spawn for unit
+    fixtures. Initial chickens land instantly either way, so episode-start food is available at once.
+
+    `ego_live` (only meaningful with `arrivals=True`, needs `n_snakes > 1`): whether slot 0 is a LIVE
+    privileged gradient-ego. `True` (training / SnakeEnv): snake 0 is live from step 0 -- SB3 drives
+    it and can't steer an inert egg -- and every OTHER founder arrives as an egg. `False` (viewer):
+    NO snake is special -- ZERO live snakes at step 0, all `n_snakes` founders arrive as eggs, and the
+    world runs with `world.no_ego=True`. Snakes appear only by hatching."""
     w = World(cfg, seed=seed, size=size)                 # fixed size (e.g. screen-fit) or random
     w.chicken_sky = arrivals
     rng = w.rng
@@ -41,7 +46,15 @@ def generate_world(cfg, seed=None, size=None, n_snakes=1, arrivals=False):
                     placed.append(p); break
             else:
                 placed.append(w._free_point(cfg.head_radius))
-        if arrivals:
+        if arrivals and not ego_live:
+            # Viewer all-eggs world: NO snake is special. Zero live snakes; ALL founders arrive as
+            # guaranteed eggs (staggered hatch). world.no_ego makes `step`/`_prune_dead` ego-free.
+            w.snakes = []
+            w._next_snake_id = 0
+            w.no_ego = True
+            for p in placed:
+                w.spawn_egg(p, timer=int(rng.integers(cfg.egg_timer // 2, cfg.egg_timer + 1)))
+        elif arrivals:
             # ego is live from step 0 (SnakeEnv drives it); every OTHER snake ARRIVES via a
             # guaranteed egg (staggered hatch so they don't all pop at once), ids assigned at hatch.
             p0 = placed[0]

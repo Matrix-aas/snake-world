@@ -117,9 +117,10 @@ class SnakeEnv(gym.Env):
         world_seed = int(self.np_random.integers(0, 2 ** 31 - 1))
         n = int(self.np_random.integers(self.cfg.n_start_min, self.cfg.n_start_max + 1))   # [C-1] spawn N
         # arrivals=True: opponents ARRIVE via hatching eggs + runtime chickens drop from the sky, so the
-        # policy trains on the same world dynamics the viewer shows (the ego stays a live snake at step 0).
+        # policy trains on the same world dynamics the viewer shows. ego_live=True keeps ONE live
+        # gradient-ego in slot 0 (SB3 drives it and can't steer an inert egg) -- unlike the viewer.
         self.world = generate_world(self.cfg, seed=world_seed, size=self._world_size, n_snakes=n,
-                                    arrivals=True)
+                                    arrivals=True, ego_live=True)
         self._opp.reset_all()                  # [I-1] drop stale opponent frame rings for the new world
         self._last_phi = self._phi()
         self._last_ids = frozenset(int(i) for i in self.world.chicken_id)

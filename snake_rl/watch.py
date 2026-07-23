@@ -66,7 +66,9 @@ def _new_ecosystem(model_path, seed, world_size=None):
     controller.sync(sd, obs_rms, clip_obs, epsilon)
     rng = np.random.default_rng(seed)
     n0 = int(rng.integers(CFG.n_start_min, CFG.n_start_max + 1))
-    world = generate_world(CFG, seed=seed, size=world_size, n_snakes=n0, arrivals=True)
+    # ego_live=False: the WATCHED world has no privileged ego -- it starts as all eggs, snakes appear
+    # only by hatching (Task 10). Every snake is driven by the same synced brain via `controller`.
+    world = generate_world(CFG, seed=seed, size=world_size, n_snakes=n0, arrivals=True, ego_live=False)
     return model, controller, world
 
 
@@ -98,9 +100,12 @@ def _step_world(world, controller):
     hatchling reusing that id starts cold (mirrors env.py's per-death ring reset). Then tops the
     population back up to the sustain floor if this step dropped it below (see _reseed_floor) --
     run_watch's gore diff snapshots BEFORE this call, so a reseed reads as a hatch effect for free."""
-    ego = world.snakes[0]
-    speed, steer, dash = controller.act(world, ego) if ego.alive else (1, 1, 0)
-    out = world.step(speed, steer, dash, opponent_fn=lambda w, s: controller.act(w, s))
+    # The viewer world is no-ego (all snakes equal): the positional action is IGNORED by world.step,
+    # which drives every live snake via opponent_fn. Pass a live snake's action when one exists (and
+    # a harmless default when the world is all-eggs) so this also stays correct for an ego world.
+    live = [s for s in world.snakes if s.alive]
+    a = controller.act(world, live[0]) if live else (1, 1, 0)
+    out = world.step(*a, opponent_fn=lambda w, s: controller.act(w, s))
     for sid, _cause in out["deaths_detailed"]:
         controller.reset_snake(sid)
     _reseed_floor(world, controller)
@@ -283,7 +288,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
     clock = pygame.time.Clock()
     paused = False
     running = True
-    follow_id = world.snakes[0].id
+    follow_id = next((s.id for s in world.snakes if s.alive), None)   # None => overview (all-eggs start)
 
     def snapshot(w):
         return _snake_snap(w), _chicken_snap(w)
@@ -314,9 +319,9 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         world = generate_world(CFG, seed=seed, size=world_size,
                                                n_snakes=int(np.random.default_rng(seed).integers(
                                                    CFG.n_start_min, CFG.n_start_max + 1)),
-                                               arrivals=True)
+                                               arrivals=True, ego_live=False)
                         controller.reset_all()
-                        follow_id = world.snakes[0].id
+                        follow_id = next((s.id for s in world.snakes if s.alive), None)
                         prev_bodies, prev_ch = cur_bodies, cur_ch = snapshot(world); since = 0.0
             interval = 1.0 / sim_hz
             if not paused:
@@ -328,7 +333,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                     _emit_gore(renderer, before, world)                   # blood/gore on eat/death/hatch
                     alive_ids = {s.id for s in world.snakes if s.alive}
                     if follow_id not in alive_ids:            # camera re-targets on death, else overview
-                        follow_id = next(iter(alive_ids), world.snakes[0].id)
+                        follow_id = next(iter(alive_ids), None)   # None => overview when nobody's alive
                     prev_bodies, prev_ch = cur_bodies, cur_ch
                     cur_bodies, cur_ch = snapshot(world)
             f = 0.0 if paused else min(1.0, since / interval)

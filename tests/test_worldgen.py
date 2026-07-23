@@ -59,3 +59,22 @@ def test_generate_world_default_is_single_and_centered():
     w = generate_world(CFG, seed=7, size=(80.0, 80.0))       # n_snakes defaults to 1
     assert len(w.snakes) == 1
     assert np.allclose(w.snakes[0].head_uw, np.array(w.size) / 2.0)
+
+
+def test_viewer_world_starts_with_only_eggs():
+    # Task 10: the WATCHED world (ego_live=False) has NO privileged gradient-ego -- zero live snakes
+    # at step 0, all founders arrive as eggs, and stepping the egg-only world hatches live snakes.
+    w = generate_world(CFG, seed=50, n_snakes=3, arrivals=True, ego_live=False)
+    assert sum(1 for s in w.snakes if s.alive) == 0
+    n_pending = int((w.eggs["owner"][:, 0] < 0).sum()) if len(w.eggs["owner"]) else 0
+    assert n_pending >= 1
+    # stepping the egg-only world does not crash and eventually hatches a snake
+    for _ in range(CFG.egg_timer + 2):
+        w.step(1, 1, 0, opponent_fn=lambda world, s: (1, 1, 0))
+    assert sum(1 for s in w.snakes if s.alive) >= 1
+
+
+def test_training_world_keeps_one_live_ego():
+    # Training needs exactly one live gradient-ego per env (SB3 can't steer an inert egg).
+    w = generate_world(CFG, seed=51, n_snakes=3, arrivals=True, ego_live=True)
+    assert sum(1 for s in w.snakes if s.alive) >= 1   # the gradient-ego is live

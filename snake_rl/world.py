@@ -122,6 +122,11 @@ class World:
             id=0, color_seed=0, energy=cfg.energy_max, target_length=cfg.start_length, rng=self.rng,
         )]
         self._next_snake_id = 1
+        # no_ego: does this world have a privileged gradient-ego in slot 0? True only for the viewer
+        # all-eggs world (worldgen ego_live=False) -- then `step` drives every snake via opponent_fn,
+        # reports no ego death, and `_prune_dead` keeps no special slot. Default False: World() and the
+        # training env keep a live slot-0 ego (SB3 drives it and reads its death). Set by worldgen.
+        self.no_ego = False
         # chickens / obstacles filled by worldgen; default empty
         self.chicken_pos = np.zeros((0, 2)); self.chicken_dir = np.zeros((0,))
         self.chicken_id = np.zeros((0,), dtype=int)      # stable id per chicken
@@ -607,8 +612,13 @@ class World:
                 s.energy = max(0.0, s.energy - s.phenotype.energy_decay)
 
     def _prune_dead(self):
-        """Drop dead non-ego opponents (ego kept in slot 0 even when dead)."""
-        self.snakes = [self.snakes[0]] + [s for s in self.snakes[1:] if s.alive]
+        """Drop dead snakes. With a privileged gradient-ego (training) slot 0 is kept even when dead
+        so SnakeEnv can read its death; a no-ego viewer world has no special slot -- drop them all
+        (and tolerate an empty list)."""
+        if self.no_ego or not self.snakes:
+            self.snakes = [s for s in self.snakes if s.alive]
+        else:
+            self.snakes = [self.snakes[0]] + [s for s in self.snakes[1:] if s.alive]
 
     def _free_point(self, radius):
         best = None; best_clear = -np.inf
@@ -619,8 +629,6 @@ class World:
             if clear > best_clear:                    # remember the least-bad candidate
                 best_clear, best = clear, p
             if clear < radius:
-                continue
-            if torus_dist(self.head, p, self.size) < self.cfg.r_flee:
                 continue
             live = [o for o in self.snakes if o.alive]      # clear EVERY live snake's body, not just the ego
             body = np.concatenate([self._body_points(o) for o in live], axis=0) if live else np.zeros((0, 2))
@@ -808,13 +816,25 @@ class World:
         opponent_fn = opponent_fn or (lambda world, s: (1, 1, 0))    # default opp: ⅓-cruise straight
         # phase 1: EVERY snake (ego + opponents) acts on the PRE-MOVE world, so collect all opponent
         # actions BEFORE moving anyone [M-2], then move ego, then move opponents with those actions.
-        ego = self.snakes[0]
-        opp_actions = {o.id: opponent_fn(self, o) for o in self.snakes[1:] if o.alive}
-        ego_dashed = self._move_snake(ego, speed_idx, steer, dash) if ego.alive else False
-        for o in self.snakes[1:]:
-            if o.alive:
-                sp, st, da = opp_actions[o.id]
-                self._move_snake(o, sp, st, da)
+        if self.no_ego:
+            # No privileged gradient-ego (viewer all-eggs world): the positional (speed_idx, steer,
+            # dash) is unused -- EVERY live snake is driven by opponent_fn, and there's no ego death
+            # to report. `snakes` may be empty here (all founders still incubating as eggs).
+            ego = None
+            ego_dashed = False
+            opp_actions = {o.id: opponent_fn(self, o) for o in self.snakes if o.alive}
+            for o in self.snakes:
+                if o.alive:
+                    sp, st, da = opp_actions[o.id]
+                    self._move_snake(o, sp, st, da)
+        else:
+            ego = self.snakes[0]
+            opp_actions = {o.id: opponent_fn(self, o) for o in self.snakes[1:] if o.alive}
+            ego_dashed = self._move_snake(ego, speed_idx, steer, dash) if ego.alive else False
+            for o in self.snakes[1:]:
+                if o.alive:
+                    sp, st, da = opp_actions[o.id]
+                    self._move_snake(o, sp, st, da)
         # phase 2: DECIDE all deaths against frozen post-move state, THEN apply (order-independent, C2)
         dying = [(s, cause) for s in self.snakes if s.alive and (cause := self._death_cause(s))]
         for s, cause in dying:
@@ -843,13 +863,16 @@ class World:
         self._resolve_mating()
         hatched_owners = self._hatch_eggs()
         self._prune_dead()
-        return {"ate": ate, "died": not ego.alive, "dashed": ego_dashed, "deaths": deaths,
+        return {"ate": ate, "died": (None if ego is None else not ego.alive), "dashed": ego_dashed, "deaths": deaths,
                 "deaths_detailed": deaths_detailed, "hatched_owners": hatched_owners,
                 "eaten_eggs": eaten_eggs}      # owner-sets of REAL eggs eaten this step (env consumes in Task 12)
 
 
 def _ego_prop(name):
-    return property(lambda self: getattr(self.snakes[0], name),
-                    lambda self, v: setattr(self.snakes[0], name, v))
+    # Slot-0 ego proxy. A no-ego viewer world can have an empty snakes list (all founders still
+    # incubating) -- read a neutral None then, and make the setter a no-op, so nothing assumes
+    # slot 0 is alive. (The training env always has a live slot-0 ego, so it never hits this path.)
+    return property(lambda self: getattr(self.snakes[0], name) if self.snakes else None,
+                    lambda self, v: setattr(self.snakes[0], name, v) if self.snakes else None)
 for _n in World._EGO_ATTRS:
     setattr(World, _n, _ego_prop(_n))

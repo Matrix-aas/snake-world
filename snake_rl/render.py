@@ -729,7 +729,7 @@ class Renderer:
         self._draw_transient(world)
         self._draw_chickens(world, chick_pos, chick_dir)
         self._draw_arrivals(world)                                   # sky-dropping chickens (Goal 2)
-        follow = follow_id if follow_id is not None else world.snakes[0].id
+        follow = follow_id if follow_id is not None else (world.snakes[0].id if world.snakes else -1)
         sensor_snake = None
         for s in world.snakes:
             if not s.alive:
