@@ -1,6 +1,7 @@
 import numpy as np
 from snake_rl.config import CFG
 from snake_rl.world import World, Snake, wrap
+from snake_rl.worldgen import generate_world
 
 
 def _two_fed_snakes(w, d=2.0):
@@ -17,6 +18,7 @@ def _two_fed_snakes(w, d=2.0):
 def test_mating_lays_egg_after_streak_and_costs_energy():
     w = World(CFG, seed=6, size=(80.0, 80.0))
     a, b = _two_fed_snakes(w, d=2.0)                        # within r_mate (CFG.r_mate)
+    a.sex = 0; b.sex = 1                                    # opposite sexes -- sex gate requires it
     for _ in range(CFG.mate_steps):
         w._resolve_mating()
     assert w.eggs["pos"].shape[0] == 1
@@ -74,3 +76,36 @@ def test_parent_cannot_eat_own_egg_but_rival_can():
     ego.id = 5                                                  # now a non-owner
     assert w.try_eat() == 1 and w.eggs["pos"].shape[0] == 0     # foreign egg: eaten
     assert ego.energy == 10.0 + CFG.egg_food
+
+
+def _ready_pair(seed, sexA, sexB, dist=3.0):
+    w = generate_world(CFG, seed=seed, n_snakes=2, size=(100.0, 100.0))   # >2*(ray_range_max+obst+head) (M4)
+    a, b = w.snakes[0], w.snakes[1]
+    # place them close, well-fed, grown, off cooldown, opposite/same sex per args
+    for s, sx in ((a, sexA), (b, sexB)):
+        s.energy = CFG.energy_max
+        s.target_length = CFG.length_cap
+        s.repro_cooldown = 0
+        s.sex = sx
+    b.head[:] = a.head + np.array([dist, 0.0]); b.head_uw[:] = b.head
+    return w, a, b
+
+
+def test_same_sex_pair_never_lays():
+    w, a, b = _ready_pair(21, 0, 0)
+    n_eggs0 = len(w.eggs["pos"])
+    for _ in range(CFG.mate_steps + 3):
+        w.step(0, 1, 0, opponent_fn=lambda world, s: (0, 1, 0))
+    assert len(w.eggs["pos"]) == n_eggs0, "same-sex pair must not produce an egg"
+
+
+def test_opposite_sex_pair_lays_after_courtship():
+    w, a, b = _ready_pair(22, 0, 1)
+    laid = False
+    for _ in range(CFG.mate_steps + 5):
+        before = len(w.eggs["pos"])
+        w.step(0, 1, 0, opponent_fn=lambda world, s: (0, 1, 0))
+        if len(w.eggs["pos"]) > before:
+            laid = True
+            break
+    assert laid, "opposite-sex ready pair should lay after holding courtship distance"

@@ -695,7 +695,8 @@ class World:
                 ready = (a.energy > c.repro_energy_frac * c.energy_max and
                          b.energy > c.repro_energy_frac * c.energy_max and
                          a.target_length > c.repro_length_min and b.target_length > c.repro_length_min and
-                         a.repro_cooldown == 0 and b.repro_cooldown == 0)
+                         a.repro_cooldown == 0 and b.repro_cooldown == 0 and
+                         a.sex != b.sex)
                 close = torus_dist(a.head_uw[None], b.head_uw, self.size)[0] <= c.r_mate
                 if ready and close:
                     self._mate_streak[key] = self._mate_streak.get(key, 0) + 1
