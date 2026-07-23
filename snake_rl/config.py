@@ -45,9 +45,10 @@ class Config:
     chicken_radius: float = 1.0
     spawn_period: int = 90           # avg steps between random spawns between min and max
     # food, population-scaled (rates; Task 9 derives the live target from snake count)
-    chickens_per_snake_max: float = 2.0
-    chickens_per_snake_min: float = 1.0
-    chicken_ceiling: int = 24        # hard cap regardless of population
+    chickens_per_snake_max: float = 3.0   # +1.5x (big map -> more food/life to watch; also feeds the
+    chickens_per_snake_min: float = 1.5   # repro energy gate -> more organic births). Resume-adapts.
+    chicken_ceiling: int = 36        # hard cap; = chickens_per_snake_max * n_max (3.0*12). Also the
+                                     # smell-field obs clip (Pitfall 12) -> a resume re-adapts the policy.
     # stamina
     s_max: float = 30.0
     stamina_drain: float = 1.0
@@ -137,8 +138,8 @@ class Config:
     gene_stamina_hi: float = 1.4
     gene_stamina_regen_lo: float = 0.7
     gene_stamina_regen_hi: float = 1.4
-    gene_rayrange_lo: float = 14.0
-    gene_rayrange_hi: float = 26.0
+    gene_rayrange_lo: float = 28.0   # 2x (big map -> snakes need to SEE farther). Per-snake vision
+    gene_rayrange_hi: float = 52.0   # range; obs stays normalized. Invariant 7 holds (52+4+1=57<90).
     gene_smell_lo: float = 1.4           # high senses => LOW smell reach (inverse trade)
     gene_smell_hi: float = 0.7
     gene_lifespan_lo: float = 900.0

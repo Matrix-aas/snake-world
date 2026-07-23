@@ -11,6 +11,13 @@ from .world import wrap, torus_delta, torus_dist
 from .worldgen import generate_world
 from .selfplay import OpponentController
 from .sensors import OBS_DIM
+from dataclasses import replace
+
+# WATCH-only richness: 2x obstacle density (rocks/trees) on the big map. Viewer-only -- obstacle COUNT
+# doesn't shift any obs bound (rays report the nearest hit, bounded), so no retrain is needed; the
+# policy threads denser clutter by sight (obstacles are solid-slide + non-lethal stun). Only the
+# n_obstacles_* counts differ from CFG.
+VIEWER_CFG = replace(CFG, n_obstacles_min=CFG.n_obstacles_min * 2, n_obstacles_max=CFG.n_obstacles_max * 2)
 
 
 def _norm_path_for(model_path):
@@ -68,7 +75,7 @@ def _new_ecosystem(model_path, seed, world_size=None):
     n0 = int(rng.integers(CFG.n_start_min, CFG.n_start_max + 1))
     # ego_live=False: the WATCHED world has no privileged ego -- it starts as all eggs, snakes appear
     # only by hatching (Task 10). Every snake is driven by the same synced brain via `controller`.
-    world = generate_world(CFG, seed=seed, size=world_size, n_snakes=n0, arrivals=True, ego_live=False)
+    world = generate_world(VIEWER_CFG, seed=seed, size=world_size, n_snakes=n0, arrivals=True, ego_live=False)
     return model, controller, world
 
 
@@ -496,7 +503,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         sim_hz = max(2, sim_hz - 2)
                     elif e.key == pygame.K_n:                 # fresh persistent world (not an autoreset)
                         seed += 1
-                        world = generate_world(CFG, seed=seed, size=world_size,
+                        world = generate_world(VIEWER_CFG, seed=seed, size=world_size,
                                                n_snakes=int(np.random.default_rng(seed).integers(
                                                    CFG.n_start_min, CFG.n_start_max + 1)),
                                                arrivals=True, ego_live=False)

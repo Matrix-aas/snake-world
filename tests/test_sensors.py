@@ -285,12 +285,13 @@ def test_observation_space_contains_crowded_stress_world():
 
 
 def test_per_snake_ray_range_gates_obstacle_detection():
-    # obstacle sits at a hit-distance of 20: INSIDE gene_rayrange_hi (26) but OUTSIDE
-    # gene_rayrange_lo (14). Only a per-snake (genome-resolved) ray_range can tell these two
-    # genomes apart here -- a reversion to the old global CFG.ray_range (20.0, itself >= the
-    # 20 hit-distance) would see the obstacle in BOTH cases, so this fails if that line reverts.
-    w = straight_world()
-    w.obstacle_pos = np.array([[52.0, 30.0]]); w.obstacle_r = np.array([1.0]); w.obstacle_kind = np.array([0])
+    # obstacle at hit-distance ~40: INSIDE gene_rayrange_hi (52) but OUTSIDE gene_rayrange_lo (28), so
+    # only a per-snake (genome-resolved) ray_range tells these two genomes apart -- a revert to a
+    # short/global ray_range would see it in BOTH (or neither). World is big enough (160) for a valid
+    # ray_range-52 nearest-image raycast (52 + obstacle_r + head_radius = 57 < 80).
+    w = World(CFG, seed=0, size=(160.0, 160.0))
+    w.head = np.array([80.0, 80.0]); w.head_uw = w.head.copy(); w.heading = 0.0   # facing +x
+    w.obstacle_pos = np.array([[120.0, 80.0]]); w.obstacle_r = np.array([1.0]); w.obstacle_kind = np.array([0])
     center_idx = CFG.n_rays // 2
 
     hi = np.zeros(gm.GENE_COUNT, np.float32); hi[gm.SENSES] = 1.0   # long ray_range, weak smell
@@ -361,18 +362,22 @@ def test_observation_space_contains_corpse_pileup_beyond_ceiling():
     w.obstacle_pos = np.zeros((0, 2)); w.obstacle_r = np.zeros((0,))   # no LOS occlusion -> the raw
                                                                        # corpse smell sum genuinely
                                                                        # exceeds the ceiling (isolate the clip)
+    # force the ego to a low-SENSES genome (max smell reach = gene_smell_lo = 1.4x) + face +x, so the
+    # clip DEFINITELY fires at the higher chicken_ceiling (36): the raw clustered-corpse sum far exceeds
+    # it regardless of the random worldgen genome.
+    e0 = w.snakes[0]
+    lo = np.zeros(gm.GENE_COUNT, np.float32)
+    w.snakes[0] = w._make_snake(e0.head, 0.0, genome=lo, sex=0, lineage=1, id=e0.id, color_seed=1,
+                                energy=CFG.energy_max, target_length=CFG.start_length, rng=w.rng)
     ego = w.snakes[0]
-    ego.heading = 0.0                                                  # face +x so the +x corpse line is
-                                                                       # straight ahead -> grad_fwd is maximal
-                                                                       # (deterministic, not RNG-heading dependent)
     n = CFG.chicken_ceiling * 3
-    positions = np.array([wrap(ego.head + np.array([0.05 + 0.03 * i, 0.0]), w.size) for i in range(n)])
+    positions = np.array([wrap(ego.head + np.array([0.05 + 0.015 * i, 0.0]), w.size) for i in range(n)])
     w.corpses = {"pos": positions, "food": np.full(n, 5.0)}
     for s in w.snakes:
         o = observe(w, s)
         assert env.observation_space.contains(o), f"snake {s.id} obs out of bounds"
     ego_obs = observe(w, ego)
-    # raw (unclipped) intensity/fwd-gradient here are ~23.8/~12.5 -- both above chicken_ceiling=12
-    # -- so landing exactly on the ceiling proves the clip fired, not that we stayed under it.
+    # the raw (unclipped) clustered-corpse intensity/fwd-gradient far exceed chicken_ceiling here, so
+    # landing EXACTLY on the ceiling proves the clip fired, not that we stayed under it.
     assert ego_obs[120] == CFG.chicken_ceiling            # corpse_intensity clipped (smell@114, corpse_int=+6)
     assert ego_obs[121] == CFG.chicken_ceiling            # corpse_grad_fwd clipped to the ceiling
