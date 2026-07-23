@@ -311,9 +311,10 @@ def _live_map(world):
 
 
 def _follow_span(snake):
-    """World-units to frame around a followed snake: its body length + generous headroom, so a good
-    action-cam shows the snake AND its surroundings (bigger snakes pull the camera out further)."""
-    return float(np.clip(3.0 * snake.target_length + 80.0, 100.0, 175.0))
+    """World-units to frame around a followed snake: its body length + headroom, so a good action-cam
+    shows the snake AND its surroundings. Kept ~1.5x tighter than the first cut (grow ~2x/len, not 3x,
+    smaller range) so big snakes fill noticeably more of the frame instead of pulling way out."""
+    return float(np.clip(2.0 * snake.target_length + 55.0, 70.0, 120.0))
 
 
 def _soonest_egg(world):
@@ -387,7 +388,8 @@ def _resolve_target(cam, world, bodies, renderer, now):
         cam["death_t"] = now                                  # followed snake just died -> start linger
     if cam["death_t"] is not None and now - cam["death_t"] < DEATH_LINGER_S and cam["last_head"] is not None:
         fs = cam["follow_snake"]
-        zt = renderer.zoom_for_span(_follow_span(fs), cam["zoom"]) if fs is not None else cam["zoom"]
+        zt = (renderer.zoom_for_span(_follow_span(fs), cam["zoom"])   # honor a manual zoom in the linger too
+              if (fs is not None and cam["auto_zoom"]) else cam["zoom"])
         return cam["last_head"], zt, fs                       # hold at the death spot, keep the panel
     egg = cam["watch_egg"]                                     # need a fresh target
     if egg is not None:
