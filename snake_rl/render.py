@@ -154,6 +154,7 @@ class Renderer:
         self._arrivals = {}        # sky-drop render state per bird: {pos_key: {"prog": smoothed 0..1}}
         self._ground_tile0 = None       # seamless procedural ground tile (camera-locked tiling, polish #3)
         self._ground_tile_cache = {}    # {tile_px: scaled tile} -- multi-bucket so zoom-ease doesn't thrash
+        self._vignette = None           # cached cinematic edge-darkening overlay (polish #4)
 
     # --- setup / assets ---
     def _load_assets(self):
@@ -233,6 +234,7 @@ class Renderer:
         self._load_assets()
         self._ground_tile0 = self._build_ground_tile()   # seamless tile for camera-locked ground (#3)
         self._ground_tile_cache = {}
+        self._vignette = self._make_vignette()           # cinematic edge-darkening (#4)
         self._motes = self._make_motes(world)
 
     def _world_to_canvas(self, p):
@@ -399,6 +401,21 @@ class Renderer:
         """Which sheet frame to show now: wall-clock time * fps, +phase (a per-entity offset so
         entities don't animate in lockstep), wrapped to [0, nframes). Smooth at any sim speed."""
         return int(self._clock * fps + phase) % nframes
+
+    def _make_vignette(self):
+        """Subtle cinematic edge-darkening, built once per canvas size (polish #4): a radial alpha ramp
+        (transparent center -> ~110/255 at the corners) that focuses the eye toward the followed snake.
+        One cached full-canvas alpha blit per frame -- cheap and self-contained."""
+        xx, yy = np.mgrid[0:self.cw, 0:self.ch].astype(np.float32)   # [x, y]
+        cx, cy = self.cw * 0.5, self.ch * 0.5
+        r = np.sqrt(((xx - cx) / cx) ** 2 + ((yy - cy) / cy) ** 2)   # 0 center -> ~1.41 corner
+        a = (np.clip((r - 0.6) / 0.8, 0.0, 1.0) ** 2 * 110).astype(np.uint8)   # ease in past ~60% radius
+        v = pygame.Surface((self.cw, self.ch), pygame.SRCALPHA)
+        v.fill((0, 0, 0, 0))
+        pa = pygame.surfarray.pixels_alpha(v)
+        pa[:] = a
+        del pa                                                       # unlock before convert/blit
+        return v.convert_alpha()
 
     def _make_motes(self, world):
         rng = np.random.default_rng(12345)
@@ -933,6 +950,8 @@ class Renderer:
         self._draw_courtship(world)                                  # hearts between courting pairs
         self._draw_particles()
         self._draw_motes(world)
+        if self._vignette is not None:                               # cinematic edge-darkening (#4)
+            self.canvas.blit(self._vignette, (0, 0))
         if self.show_sensors and sensor_snake is not None:
             s, b = sensor_snake
             d = b[0] - b[1] if len(b) > 1 else s.heading_vec()

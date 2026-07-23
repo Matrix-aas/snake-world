@@ -149,6 +149,17 @@ def test_gore_burst_lands_at_camera_correct_screen_position():
     r.close()
 
 
+def test_vignette_alpha_increases_toward_edges():
+    # Polish #4: the cinematic vignette is transparent at center and darkens toward the corners.
+    w = generate_world(CFG, seed=0, size=(120.0, 120.0), n_snakes=1)
+    r = Renderer(scale=5); r.draw(w)
+    a = pygame.surfarray.array_alpha(r._vignette)
+    cw, ch = r._vignette.get_size()
+    assert a[cw // 2, ch // 2] == 0                         # center fully transparent
+    assert a[2, 2] > a[cw // 2, ch // 2] and a[2, 2] > 20   # corner darkened
+    r.close()
+
+
 def test_ground_fully_covers_canvas_at_all_camera_offsets_and_zooms():
     # Phase B polish #3: the camera-locked ground must FULLY cover the canvas at every offset/zoom --
     # no gaps (the red-seam bug was uncovered clear-color bleeding through misaligned tiles). Fill the
