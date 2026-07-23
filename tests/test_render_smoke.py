@@ -151,6 +151,25 @@ def test_snake_palette_differs_by_lineage_and_genome():
     r.close()
 
 
+def test_inspector_overlay_renders_for_followed_snake():
+    # Phase B increment 3: the genome inspector overlay (toggle I) must render for the followed snake
+    # -- 9 gene bars + sex + age + lineage swatch + life stats -- without crashing, and be a no-op
+    # when off or when there's no live snake to follow.
+    w = generate_world(CFG, seed=1, size=(120.0, 120.0), n_snakes=2)
+    r = Renderer(scale=5, show_inspector=True)
+    fid = w.snakes[0].id
+    r.draw(w, follow_id=fid, cam_center=tuple(w.snakes[0].head_uw), zoom=3.0,
+           inspector_stats={fid: {"kills": 2, "offspring": 3}})    # with stats
+    r.draw(w, follow_id=fid)                                        # stats None -> shows zeros, no crash
+    r.toggle_inspector()                                           # off
+    r.draw(w, follow_id=fid)
+    # all-eggs world: no followed snake -> overlay is a silent no-op
+    r.show_inspector = True
+    we = generate_world(CFG, seed=2, size=(120.0, 120.0), n_snakes=2, arrivals=True, ego_live=False)
+    r.draw(we)
+    r.close()
+
+
 def test_render_sensors_handle_corpse_ray_kind():
     # Force a ray to hit a corpse (kind 5) -- KeyErrors if RAY_KIND isn't extended for it.
     from snake_rl.sensors import vision_distances

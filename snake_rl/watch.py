@@ -7,7 +7,7 @@ from stable_baselines3 import PPO
 from .config import CFG
 from .train import build_vec
 from .render import Renderer, ZOOM_MIN, ZOOM_MAX
-from .world import wrap, torus_delta
+from .world import wrap, torus_delta, torus_dist
 from .worldgen import generate_world
 from .selfplay import OpponentController
 from .sensors import OBS_DIM
@@ -270,6 +270,28 @@ def _screen_fit_world_size(short=86.4):
     return (short, short * sh / sw), (sw, sh)
 
 
+def _update_life_stats(stats, out, pre_heads, size):
+    """Lightweight per-snake life stats for the genome inspector (Phase B increment 3). Offspring:
+    each real hatch credits BOTH co-owners (out['hatched_owners'] = frozensets of owner ids).
+    Kills: deaths_detailed carries only the victim + cause, not the killer, so credit the nearest
+    pre-step rival (a cut-off death means the victim crossed in front of them). Snake ids are
+    monotonic (never reused), so a dict keyed by id can't leak across occupants.
+    ponytail: nearest-rival is an approximation for the killer; exact attribution would re-run the
+    cut-off geometry -- not worth it for a viewer label."""
+    for owners in out["hatched_owners"]:
+        for oid in owners:
+            stats.setdefault(int(oid), {"kills": 0, "offspring": 0})["offspring"] += 1
+    for sid, cause in out["deaths_detailed"]:
+        if cause != "snake" or sid not in pre_heads:
+            continue
+        others = [(oid, h) for oid, h in pre_heads.items() if oid != sid]
+        if not others:
+            continue
+        vh = pre_heads[sid]
+        killer = min(others, key=lambda oh: float(torus_dist(vh[None], oh[1], size)[0]))[0]
+        stats.setdefault(int(killer), {"kills": 0, "offspring": 0})["kills"] += 1
+
+
 # --- viewer camera (free-pan + follow, Phase B increment 1) ---
 CAM_FOLLOW_ZOOM = 3.0       # default zoom when following a snake (overview forces zoom 1)
 PAN_UNITS_PER_SEC = 45.0    # free-pan speed at zoom 1 (scaled by 1/zoom so panning feels constant)
@@ -344,15 +366,18 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
     # random map on every launch (so it's fresh each time, not the same fixed world); pass --seed
     # for a reproducible one. The N key still steps forward from whatever seed we start on.
     seed = seed if seed is not None else int.from_bytes(os.urandom(4), "little")
-    world_size = screen_size = None
-    if fullscreen:
-        world_size, screen_size = _screen_fit_world_size()   # map fills the screen at its aspect
+    # The viewer world is now BIGGER THAN THE SCREEN: sample its size from cfg.world_size_min/max
+    # (like training/worldgen), and use the desktop resolution ONLY for the display surface. The
+    # camera + zoom does the fitting (overview = whole world letterboxed; follow zooms in).
+    world_size = None
+    screen_size = _screen_fit_world_size()[1] if fullscreen else None
     model, controller, world = _new_ecosystem(model_path, seed, world_size=world_size)
     renderer = Renderer(fullscreen=fullscreen, screen_size=screen_size)
     clock = pygame.time.Clock()
     paused = False
     running = True
     cam = _new_camera(world)   # free-pan/follow camera (arrows pan, [/] cycle, Tab toggle, wheel/+/- zoom)
+    life_stats = {}            # per-snake {kills, offspring} for the genome inspector (I); reset on N
 
     def snapshot(w):
         return _snake_snap(w), _chicken_snap(w)
@@ -376,6 +401,8 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                         renderer.toggle_sensors()
                     elif e.key == pygame.K_h:
                         renderer.toggle_rings()
+                    elif e.key == pygame.K_i:                 # genome inspector (followed snake)
+                        renderer.toggle_inspector()
                     elif e.key == pygame.K_TAB:               # free <-> follow
                         if cam["mode"] == "follow":
                             seed_c = cam["last_head"] if cam["last_head"] is not None else world.size / 2
@@ -402,6 +429,7 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                                                arrivals=True, ego_live=False)
                         controller.reset_all()
                         cam = _new_camera(world)
+                        life_stats = {}
                         prev_bodies, prev_ch = cur_bodies, cur_ch = snapshot(world); since = 0.0
             if cam["mode"] == "free":                          # arrow-key pan (held keys, smooth)
                 keys = pygame.key.get_pressed()
@@ -416,8 +444,10 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
                 while since >= interval:
                     since -= interval
                     before = _gore_state(world)
-                    _step_world(world, controller)
+                    pre_heads = {s.id: s.head_uw.copy() for s in world.snakes if s.alive}
+                    out = _step_world(world, controller)
                     _emit_gore(renderer, before, world)                   # blood/gore on eat/death/hatch
+                    _update_life_stats(life_stats, out, pre_heads, world.size)   # inspector kills/offspring
                     prev_bodies, prev_ch = cur_bodies, cur_ch
                     cur_bodies, cur_ch = snapshot(world)
             f = 0.0 if paused else min(1.0, since / interval)
@@ -425,6 +455,6 @@ def run_watch(model_path="models/snake.zip", seed=None, fps=60, sim_hz=10, fulls
             cpos, cdir = _interp_chickens(prev_ch, cur_ch, f, world.size)
             cam_center, draw_zoom = _camera_view(cam, world, bodies, pygame.time.get_ticks() / 1000.0)
             renderer.draw(world, bodies, cpos, cdir, follow_id=cam["follow_id"],
-                          cam_center=cam_center, zoom=draw_zoom)
+                          cam_center=cam_center, zoom=draw_zoom, inspector_stats=life_stats)
     finally:
         renderer.close()

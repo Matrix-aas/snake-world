@@ -4,7 +4,8 @@ import numpy as np
 from snake_rl.config import CFG
 from snake_rl.train import train
 from snake_rl.watch import (rollout_once, run_headless, _step_world, _reseed_floor, _load_model,
-                            _new_ecosystem, _new_camera, _cycle_follow, _camera_view, DEATH_LINGER_S)
+                            _new_ecosystem, _new_camera, _cycle_follow, _camera_view, DEATH_LINGER_S,
+                            _update_life_stats)
 from snake_rl.selfplay import OpponentController
 from snake_rl.worldgen import generate_world
 from stable_baselines3 import PPO
@@ -124,6 +125,23 @@ def test_camera_overview_when_no_live_snakes():
     assert cam["follow_id"] is None
     center, z = _camera_view(cam, w, {}, now=0.0)
     assert z == 1.0 and np.allclose(center, np.asarray(w.size, float) / 2)
+
+
+def test_life_stats_offspring_exact_and_kills_nearest_rival():
+    # Phase B increment 3: offspring credits BOTH co-owners of every real hatch (exact); a cut-off
+    # ('snake') death credits the nearest pre-step rival (approx, since deaths_detailed lacks a killer).
+    size = np.array([100.0, 100.0])
+    stats = {}
+    out = {"hatched_owners": [frozenset((4, 7)), frozenset((7, 9))],
+           "deaths_detailed": [(2, "snake"), (5, "starve")]}
+    pre = {2: np.array([10.0, 10.0]),          # victim
+           3: np.array([11.0, 10.0]),          # nearest rival -> credited the kill
+           8: np.array([90.0, 90.0])}          # far rival
+    _update_life_stats(stats, out, pre, size)
+    assert stats[7]["offspring"] == 2 and stats[4]["offspring"] == 1 and stats[9]["offspring"] == 1
+    assert stats[3]["kills"] == 1              # nearest to the victim
+    assert 8 not in stats                      # far rival not credited
+    assert 5 not in stats                      # a 'starve' death is not a kill
 
 
 def test_load_model_rejects_dim_mismatched_model(tmp_path):

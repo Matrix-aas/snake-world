@@ -59,6 +59,10 @@ RAY_OTHER = (110, 200, 240); RAY_EGG = (240, 176, 224)          # B2 ray kinds 3
 RAY_CORPSE = (176, 132, 84)                                     # ray kind 5=corpse
 RAY_KIND = {-1: RAY_NONE, 0: RAY_OBST, 1: RAY_CHICK, 2: RAY_SELF, 3: RAY_OTHER, 4: RAY_EGG, 5: RAY_CORPSE}
 
+# genome inspector (Phase B increment 3): short labels for the 9 genes, in genome.py index order
+# (SIZE, METABOLISM, SPEED, STAMINA, SENSES, LIFESPAN, AGGRESSION, KIN_CARE, BOLDNESS).
+GENE_LABELS = ("size", "metab", "speed", "stamina", "senses", "lifespan", "aggr", "kin", "bold")
+
 # chicken FSM state (world.chicken_state) -> (sheet asset key, playback fps, frame count).
 # 0=PECK (slow head-bob), 1=WALK (waddle), 2=FLEE (fast flustered flap).
 CHICK_ANIM = {0: ("chicken_peck", 6.0, 4), 1: ("chicken_walk", 7.0, 4), 2: ("chicken_run", 13.0, 4)}
@@ -119,11 +123,13 @@ def _lerp(a, b, t):
 
 
 class Renderer:
-    def __init__(self, scale=None, show_sensors=False, show_rings=False, fullscreen=False, screen_size=None):
+    def __init__(self, scale=None, show_sensors=False, show_rings=False, fullscreen=False, screen_size=None,
+                 show_inspector=False):
         pygame.init()
         self.scale = scale
         self.show_sensors = show_sensors      # vision-ray overlay (toggle key: S) -- OFF by default
         self.show_rings = show_rings          # per-snake ring HUD circles (toggle key: H) -- OFF by default
+        self.show_inspector = show_inspector  # genome inspector for the followed snake (toggle key: I)
         self.fullscreen = fullscreen
         self.screen_size = screen_size
         self.canvas = self.display = None
@@ -217,9 +223,13 @@ class Renderer:
         self.dw, self.dh = dw, dh
         self._ss = 2 if max(dw, dh) <= 1100 else 1    # supersample small windows; native res is crisp enough
         self.cw, self.ch = dw * self._ss, dh * self._ss
-        self._base_scale = self.cw / world.size[0]    # world units -> canvas px at zoom 1
-        self._scale = self._base_scale                # draw() re-derives this as base * zoom each frame
+        # base scale FITS THE WHOLE WORLD in the frame (min over both axes -> letterboxed overview);
+        # the world is now bigger than / a different aspect from the screen, so this must not assume
+        # a width-only fit. draw() re-derives self._scale = base * zoom each frame.
+        self._base_scale = min(self.cw / world.size[0], self.ch / world.size[1])
+        self._scale = self._base_scale
         self.canvas = pygame.Surface((self.cw, self.ch)).convert()
+        self._panel_font = pygame.font.SysFont("menlo,consolas,monospace", max(11, int(13 * self._ss)))
         self._sprite_cache = {}                       # fresh sprites for the new surface format (Pitfall 11)
         self._load_assets()
         self._ground_surf = self._build_ground()
@@ -353,6 +363,31 @@ class Renderer:
             for c in range(cols):
                 surf.blit(feather[pick(c, r)], (c * tile_px - f, r * tile_px - f))
         return surf
+
+    def _draw_ground(self):
+        """Blit the ground CAMERA-RELATIVE so the backdrop pans + zooms with the world (else entities
+        slide over a frozen wallpaper). `_ground_surf` is a cw x ch tileable grass wallpaper locked to
+        world coords (period cw/base world units). Each frame: sample a (cw/zoom x ch/zoom) window at
+        the camera's world offset -- wrap-blitting up to 4 copies so it tiles seamlessly -- then
+        smoothscale that window up to the full canvas. Output stays canvas-sized at any zoom, so memory
+        is bounded (no giant zoomed surface). ponytail: grass is uniform patchwork, so the wallpaper
+        period need not match the torus period -- a coarse lock to world origin reads fine."""
+        g = self._ground_surf
+        gw, gh = g.get_size()
+        z = max(1e-6, self.zoom)
+        base = self._base_scale
+        sw = max(1, min(gw, int(round(self.cw / z))))          # source window (canvas / zoom), <= one period
+        sh = max(1, min(gh, int(round(self.ch / z))))
+        # world-origin -> texture px of the window's top-left (world_left * base), wrapped into [0, period)
+        sx = float(self._camc[0]) * base - self.cw / (2.0 * z)
+        sy = float(self._camc[1]) * base - self.ch / (2.0 * z)
+        sx0 = int(np.floor(sx)) % gw
+        sy0 = int(np.floor(sy)) % gh
+        src = pygame.Surface((sw, sh)).convert()
+        for bx in (-sx0, -sx0 + gw):                           # up to 4 wrapped copies fill the window
+            for by in (-sy0, -sy0 + gh):
+                src.blit(g, (bx, by))
+        self.canvas.blit(pygame.transform.smoothscale(src, (self.cw, self.ch)), (0, 0))
 
     def _ground_tileset(self, variants, T, f):
         """Prepare the patchwork tiles once: each variant tone-matched (85% toward the shared mean)
@@ -629,6 +664,50 @@ class Renderer:
                 rect = pygame.Rect(p[0] - r_px, p[1] - r_px, 2 * r_px, 2 * r_px)
                 pygame.draw.arc(self.canvas, RING_COLORS[i], rect, start, end, lw)
 
+    def _panel_bar(self, surf, x, y, labelw, barw, label, frac, color):
+        f = self._panel_font
+        surf.blit(f.render(label, True, (200, 206, 214)), (x, y))
+        bx = x + labelw
+        bh = f.get_height()
+        frac = float(np.clip(frac, 0.0, 1.0))
+        pygame.draw.rect(surf, (44, 50, 60), (bx, y, barw, bh))
+        pygame.draw.rect(surf, color, (bx, y, int(barw * frac), bh))
+        surf.blit(f.render(f"{frac:.2f}", True, (230, 234, 240)), (bx + barw + int(6 * self._ss), y))
+
+    def _draw_inspector(self, world, snake, stats):
+        """Genome inspector overlay for the FOLLOWED snake (toggle key I): a semi-transparent corner
+        panel with the family swatch + lineage id, sex, an age/lifespan bar, the 9 gene bars (0..1),
+        and lightweight life stats (kills/offspring, tracked in watch from step's deaths/hatches)."""
+        f = self._panel_font
+        s = self._ss
+        lh = f.get_height() + int(4 * s)
+        pad = int(10 * s)
+        labelw = int(78 * s); barw = int(120 * s)
+        width = pad * 2 + labelw + barw + int(52 * s)
+        rows = len(GENE_LABELS) + 3                       # header, age bar, 9 genes, stats line
+        height = pad * 2 + lh * rows
+        panel = pygame.Surface((width, height), pygame.SRCALPHA)
+        panel.fill((14, 18, 24, 214))
+        pygame.draw.rect(panel, (60, 70, 86, 235), panel.get_rect(), max(1, s))
+        y = pad
+        fam = color_for(snake.lineage)                    # family color swatch + lineage id + sex glyph
+        sw = int(14 * s)
+        pygame.draw.rect(panel, fam, (pad, y + int(1 * s), sw, sw))
+        sexg = "♀" if int(snake.sex) == 0 else "♂"   # female / male
+        panel.blit(f.render(f"line {int(snake.lineage)}   {sexg}", True, (236, 240, 246)),
+                   (pad + sw + int(8 * s), y))
+        y += lh
+        agefrac = snake.age / max(1.0, float(snake.max_lifespan))
+        self._panel_bar(panel, pad, y, labelw, barw, "age", agefrac, (206, 180, 118)); y += lh
+        g = np.asarray(snake.genome, float)
+        for i, lab in enumerate(GENE_LABELS):
+            self._panel_bar(panel, pad, y, labelw, barw, lab, g[i] if i < len(g) else 0.0,
+                            (120, 190, 150)); y += lh
+        st = (stats or {}).get(snake.id, {})       # kills~ is the nearest-rival APPROXIMATION (see watch)
+        panel.blit(f.render(f"kills~{st.get('kills', 0)}   offspring {st.get('offspring', 0)}",
+                            True, (240, 212, 160)), (pad, y))
+        self.canvas.blit(panel.convert_alpha(), (int(14 * s), int(14 * s)))
+
     # --- gore / effects ---
     def spawn_eat(self, pos):
         """Chicken eaten: a burst of blood droplets + a few flesh/feather bits + a small decal."""
@@ -752,7 +831,7 @@ class Renderer:
                 pygame.draw.circle(self.canvas, col, tuple(pts[-1]), max(2, SS + 1))
 
     def draw(self, world, bodies=None, chick_pos=None, chick_dir=None, follow_id=None,
-             cam_center=None, zoom=1.0):
+             cam_center=None, zoom=1.0, inspector_stats=None):
         """Composite the scene in depth order: ground -> obstacles -> blood decals -> corpses ->
         eggs -> chickens -> sky-dropping chickens -> snakes -> gore particles -> ambient -> HUD/sensors.
         `bodies`: optional {snake_id: interpolated unwrapped body polyline}. `follow_id`: which
@@ -771,7 +850,7 @@ class Renderer:
         self._pery = float(world.size[1]) * self._scale
         if chick_pos is None:
             chick_pos, chick_dir = world.chicken_pos, world.chicken_dir
-        self.canvas.blit(self._ground_surf, (0, 0))
+        self._draw_ground()
         self._draw_obstacles(world)
         self._draw_decals()
         self._draw_corpses(world)
@@ -781,6 +860,7 @@ class Renderer:
         self._draw_arrivals(world)                                   # sky-dropping chickens (Goal 2)
         follow = follow_id if follow_id is not None else (world.snakes[0].id if world.snakes else -1)
         sensor_snake = None
+        follow_snake = None
         for s in world.snakes:
             if not s.alive:
                 continue
@@ -793,6 +873,7 @@ class Renderer:
                 self._ring_hud(world, s, wrap(b[0], world.size), big=big)
             if big:
                 sensor_snake = (s, b)
+                follow_snake = s
         self._draw_particles()
         self._draw_motes(world)
         if self.show_sensors and sensor_snake is not None:
@@ -800,6 +881,8 @@ class Renderer:
             d = b[0] - b[1] if len(b) > 1 else s.heading_vec()
             nrm = np.linalg.norm(d); d = d / nrm if nrm > 1e-6 else s.heading_vec()
             self._draw_sensors(world, b[0], float(np.arctan2(d[1], d[0])), s)
+        if self.show_inspector and follow_snake is not None:
+            self._draw_inspector(world, follow_snake, inspector_stats)
         # Blit into the window via a temp surface (writing straight into the window renders black on
         # some backends). At SS=1 the canvas is already display-sized.
         if self._ss == 1:
@@ -813,6 +896,9 @@ class Renderer:
 
     def toggle_rings(self):
         self.show_rings = not self.show_rings
+
+    def toggle_inspector(self):
+        self.show_inspector = not self.show_inspector
 
     def close(self):
         pygame.quit()
